@@ -19,7 +19,7 @@ map("n", "<leader>nv", "<cmd>noh<cr>")
 map("n", "<leader>e", "<cmd>enew<cr>")
 
 local home_path = vim.fn.expand("~")
-local config_path = vim.fs.joinpath(vim.fn.expand("config"), "lua/neo")
+local config_path = vim.fs.joinpath(vim.fn.stdpath("config"), "lua/neo")
 
 map("n", "<leader>cc", "<cmd>cd %:p:h<cr>")
 map("n", "<leader>ch", "<cmd>cd " .. home_path .. "<cr>")

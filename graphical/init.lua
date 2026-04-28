@@ -1,14 +1,22 @@
-local default_font_size = 22
+local M = {}
 
-local font_family = "UbuntuMono Nerd Font"
-local font_size = default_font_size
+M.defaults = {
+    font_family = "UbuntuMono Nerd Font",
+    font_size = 22,
+}
 
-if vim.fn.has("win32") == 1 then
-    font_size = 14
+function M.setup()
+    local ok, cfg = pcall(require, "neo.overrides")
+    local overrides = (ok and type(cfg) == "table") and cfg.graphical or {}
+
+    local font_family = overrides.font_family or M.defaults.font_family
+    local font_size = overrides.font_size or M.defaults.font_size
+
+    vim.opt.guifont = font_family .. ":h" .. font_size
+
+    if vim.g.neovide then
+        require("neo.graphical.neovide")
+    end
 end
 
-vim.opt.guifont = font_family .. ":h" .. font_size
-
-if vim.g.neovide ~= nil then
-    require("neo.graphical.neovide")
-end
+return M

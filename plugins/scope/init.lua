@@ -121,31 +121,63 @@ end)
 
 -- ─── Input & Keymaps ─────────────────────────────────────────────────────────
 local function setup_keymaps()
-  local opts = { buffer = state.prompt_buf, silent = true, nowait = true }
-  vim.keymap.set("i", "<CR>", function()
-    local sel = state.filtered[state.selected]
-    close_picker()
-    if sel then sel.action(sel) end
-  end, opts)
-  vim.keymap.set("i", "<Esc>", close_picker, opts)
-  vim.keymap.set("i", "<Up>", function()
-    state.selected = math.max(1, state.selected - 1)
-    render_results()
-  end, opts)
-  vim.keymap.set("i", "<Down>", function()
-    state.selected = math.min(#state.filtered, state.selected + 1)
-    render_results()
-  end, opts)
+    local opts = { buffer = state.prompt_buf, silent = true, nowait = true }
 
-  vim.api.nvim_create_autocmd("TextChangedI", {
-    buffer = state.prompt_buf,
-    callback = debounced_filter,
-  })
-  vim.api.nvim_create_autocmd("WinClosed", {
-    pattern = tostring(state.prompt_win),
-    once = true,
-    callback = close_picker,
-  })
+    vim.keymap.set("i", "<CR>", function()
+      local sel = state.filtered[state.selected]
+      close_picker()
+      if sel then sel.action(sel) end
+    end, opts)
+
+    vim.keymap.set("n", "<Esc>", close_picker, opts)
+
+    -- navigation
+    vim.keymap.set({"i", "n"}, "<Up>", function()
+      state.selected = math.max(1, state.selected - 1)
+      render_results()
+    end, opts)
+
+    vim.keymap.set("n", "k", function()
+        state.selected = math.max(1, state.selected - 1)
+        render_results()
+    end, opts)
+
+    vim.keymap.set({"i", "n"}, "<Down>", function()
+      state.selected = math.min(#state.filtered, state.selected + 1)
+      render_results()
+    end, opts)
+
+    vim.keymap.set("n", "j", function()
+        state.selected = math.min(#state.filtered, state.selected + 1)
+        render_results()
+    end, opts)
+
+    vim.keymap.set("n", "go", function()
+        state.selected = 1
+        render_results()
+    end, opts)
+
+    vim.keymap.set("n", "gg", function()
+        state.selected = 1
+        render_results()
+    end, opts)
+
+    vim.keymap.set("n", "G", function()
+        state.selected = #state.filtered
+        render_results()
+    end, opts)
+
+    -- autocmds for handling picker keymap events
+    vim.api.nvim_create_autocmd("TextChangedI", {
+        buffer = state.prompt_buf,
+        callback = debounced_filter,
+    })
+
+    vim.api.nvim_create_autocmd("WinClosed", {
+        pattern = tostring(state.prompt_win),
+        once = true,
+        callback = close_picker,
+    })
 end
 
 -- ─── File Finder ─────────────────────────────────────────────────────────────

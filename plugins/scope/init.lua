@@ -13,7 +13,7 @@ local state = {
 -- Create grep augroup once at require-time
 local GREP_AUGROUP = vim.api.nvim_create_augroup("ScopeGrep", { clear = true })
 
--- ─── Fuzzy Matcher ───────────────────────────────────────────────────────────
+-- Fuzzy Matcher 
 local function fuzzy_score(str, pattern)
   if not pattern or pattern == "" then return 1, {} end
   local s, p = str:lower(), pattern:lower()
@@ -33,7 +33,7 @@ local function fuzzy_score(str, pattern)
   return p_idx <= #p and 0 or score, {}
 end
 
--- ─── Debounce Helper (self-contained timer per instance) ─────────────────────
+-- Debounce Helper (self-contained timer per instance) 
 local function debounce(ms, fn)
   local timer = vim.uv.new_timer()
   return function(...)
@@ -43,7 +43,7 @@ local function debounce(ms, fn)
   end
 end
 
--- ─── UI Management ───────────────────────────────────────────────────────────
+-- UI Management 
 local function close_picker()
   if vim.api.nvim_get_mode().mode:match("i") then vim.cmd("stopinsert") end
   if state.job_id then vim.fn.jobstop(state.job_id) end
@@ -82,7 +82,7 @@ local function create_ui(title)
   vim.cmd("startinsert")
 end
 
--- ─── Rendering ───────────────────────────────────────────────────────────────
+-- Rendering 
 local function render_results()
   if not state.results_buf or not vim.api.nvim_buf_is_valid(state.results_buf) then return end
   vim.api.nvim_buf_clear_namespace(state.results_buf, state.ns_id, 0, -1)
@@ -119,7 +119,7 @@ local debounced_filter = debounce(30, function()
   render_results()
 end)
 
--- ─── Input & Keymaps ─────────────────────────────────────────────────────────
+-- Input & Keymaps 
 local function setup_keymaps()
     local opts = { buffer = state.prompt_buf, silent = true, nowait = true }
 
@@ -180,7 +180,7 @@ local function setup_keymaps()
     })
 end
 
--- ─── File Finder ─────────────────────────────────────────────────────────────
+-- File Finder 
 local function scan_files_async(callback)
   local cwd = vim.fn.getcwd()
   local files = {}
@@ -240,7 +240,7 @@ local function scan_files_async(callback)
   step()
 end
 
--- ─── Live Grep ───────────────────────────────────────────────────────────────
+-- Live Grep 
 local function run_grep_async(query, on_line, on_exit)
   local cwd = vim.fn.getcwd()
   local cmd
@@ -282,7 +282,7 @@ local function run_grep_async(query, on_line, on_exit)
   end
 end
 
--- ─── Actions ─────────────────────────────────────────────────────────────────
+-- Actions 
 local function open_file(path, line, col)
   vim.cmd("edit " .. vim.fn.fnameescape(path))
   if line and col then
@@ -290,7 +290,7 @@ local function open_file(path, line, col)
   end
 end
 
--- ─── Public API ──────────────────────────────────────────────────────────────
+-- Public API 
 function M.find_files()
   state.mode = "files"
   state.items = {}

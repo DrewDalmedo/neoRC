@@ -123,7 +123,7 @@ end)
 local function setup_keymaps()
     local opts = { buffer = state.prompt_buf, silent = true, nowait = true }
 
-    vim.keymap.set("i", "<CR>", function()
+    vim.keymap.set({"i", "n"}, "<CR>", function()
       local sel = state.filtered[state.selected]
       close_picker()
       if sel then sel.action(sel) end
@@ -310,7 +310,7 @@ end
 function M.live_grep()
   state.mode = "grep"
   state.items = {}
-  create_ui(" Live Grep ")
+  create_ui(" Grep ")
   setup_keymaps()
   vim.cmd("startinsert!")
 

@@ -148,6 +148,24 @@ eq("file default tag", find(items, "notes.md").tag, tmp_tag)
 eq("missing single skipped", find(items, "Missing"), nil)
 eq("malformed entry reported", notified ~= nil and notified:find("malformed") ~= nil, true)
 
+-- name renames a single/file project's display; scans ignore it (their
+-- projects name themselves after their directories)
+projects.setup({ dirs = {
+    { tmp .. "/Embedded/blinky", single = true, tag = "Pinned", name = "Blinky!" },
+    { tmp .. "/notes.md", file = true, name = "Notes" },
+    { tmp .. "/Alpha", name = "Ignored" },
+} })
+items = projects.items()
+eq("rename block count", #items, (link_ok and 3 or 2) + 2)
+eq("renamed single", find(items, "Blinky!") ~= nil, true)
+eq("renamed single path", vim.fs.normalize(find(items, "Blinky!").path),
+    vim.fs.normalize(tmp .. "/Embedded/blinky"))
+eq("renamed single display", find(items, "Blinky!").display:match("^Pinned%s+Blinky!$") ~= nil, true)
+eq("renamed file", find(items, "Notes").file, true)
+eq("scan keeps own names", find(items, "beta") ~= nil, true)
+eq("scan name ignored", find(items, "Ignored"), nil)
+eq("fuzzy matches renamed", fuzzy.filter(items, "blinky!")[1].name, "Blinky!")
+
 -- setup{dirs} replaces the tracked set outright
 projects.setup({ dirs = { tmp .. "/Embedded" } })
 items = projects.items()

@@ -23,7 +23,9 @@
 --   { "Uni", tag = "School" }             scan Uni, but tag projects "School"
 --   { "Work/dotfiles", single = true }    the path itself is one project
 --   { "~/.wezterm.lua", file = true }     one project; <CR> opens the file
--- single/file entries default their tag to the parent directory's name.
+-- single/file entries default their tag to the parent directory's name and
+-- their display name to the path's basename; tag = and name = replace those
+-- (e.g. name = "Neo" shows Neo for a project living in .../neo).
 --
 -- Paths in every form resolve the same: with no prefix they are relative
 -- to the home directory ("Documents" -> ~/Documents); "~/...", "/...",
@@ -58,7 +60,7 @@ function M.resolve(dir)
 end
 
 -- Normalize one dirs entry (string or table) into
--- { path, tag, kind = "scan" | "single" | "file" }, or nil if malformed.
+-- { path, tag, kind = "scan" | "single" | "file", name? }, nil if malformed.
 local function parse_entry(raw)
     local entry = type(raw) == "string" and { raw } or raw
     if type(entry) ~= "table" or type(entry[1]) ~= "string" then return nil end
@@ -69,7 +71,7 @@ local function parse_entry(raw)
         -- the containing directory names the category, in every kind
         tag = vim.fs.basename(kind == "scan" and path or vim.fs.dirname(path))
     end
-    return { path = path, tag = tag, kind = kind }
+    return { path = path, tag = tag, kind = kind, name = entry.name }
 end
 
 -- Parse the configured entries and keep those that exist with the right
@@ -153,7 +155,7 @@ local function build_items(entries)
                 add(entry, name, vim.fs.joinpath(entry.path, name))
             end
         else
-            add(entry, vim.fs.basename(entry.path), entry.path)
+            add(entry, entry.name or vim.fs.basename(entry.path), entry.path)
         end
     end
     return items

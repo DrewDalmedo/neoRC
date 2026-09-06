@@ -1,13 +1,15 @@
 -- lua/neo/plugins/projects/init.lua
 -- Project selector built on the generic picker framework (neo.plugins.picker).
--- A "project" is an immediate subdirectory of a tracked parent directory, and
--- the parent's basename becomes the category label shown beside it:
+-- A "project" is normally an immediate subdirectory of a tracked parent
+-- directory, and the parent's basename becomes the category tag shown
+-- beside it:
 --
 --   Embedded   blinky        <- ~/Embedded/blinky
 --   Projects   neo           <- ~/Projects/neo
 --
 -- The fuzzy prompt matches the whole line, so a query can hit the project
--- name, the label, or both ("emb bl"). <CR> cds into the selected project.
+-- name, the tag, or both ("emb bl"). <CR> cds into the selected project
+-- (or opens it, for file entries).
 --
 -- The tracked set is decided at setup(), first hit wins:
 --   1. setup({ dirs = ... })
@@ -16,22 +18,37 @@
 --          return { projects = { dirs = { "Uni", "~/Work" } } }
 --   3. M.default_dirs
 --
--- Each dir is a string: with no prefix it is relative to the home directory
--- ("Documents" -> ~/Documents); "~/...", "/...", "\\server\..." and
--- drive-letter ("C:/...") paths are used as written. Dirs that don't exist
--- are skipped silently, so one list can serve every machine the config is
--- deployed to.
+-- A dirs entry is a path string, scanned for subdirectory projects and
+-- tagged with its own basename, or a table carrying options:
+--   { "Uni", tag = "School" }             scan Uni, but tag projects "School"
+--   { "Work/dotfiles", single = true }    the path itself is one project
+--   { "~/.wezterm.lua", file = true }     one project; <CR> opens the file
+-- single/file entries default their tag to the parent directory's name.
+--
+-- Paths in every form resolve the same: with no prefix they are relative
+-- to the home directory ("Documents" -> ~/Documents); "~/...", "/...",
+-- "\\server\..." and drive-letter ("C:/...") paths are used as written.
+-- Entries that don't exist are skipped silently, so one list can serve
+-- every machine the config is deployed to.
 local picker = require("neo.plugins.picker")
+local util = require("neo.plugins.picker.util")
 
 local M = {}
 
--- Tracked when neither setup{dirs} nor overrides.lua gives a set.
-M.default_dirs = { "Documents", "Projects", "Personal" }
+-- Tracked when neither setup{dirs} nor overrides.lua gives a set. The
+-- Neovim config dir rides along as a single project from wherever this
+-- platform keeps it (~/.config/nvim, ~/AppData/Local/nvim, ...).
+M.default_dirs = {
+    "Documents",
+    "Projects",
+    "Personal",
+    { vim.fn.stdpath("config"), single = true, tag = "Config" },
+}
 
 local config = { dirs = M.default_dirs }
 
--- Resolve one configured dir string to an absolute path. Anything without a
--- "~", "/", "\" or drive-letter prefix is taken relative to the home
+-- Resolve one configured path string to an absolute path. Anything without
+-- a "~", "/", "\" or drive-letter prefix is taken relative to the home
 -- directory; vim.fs.normalize expands the "~" portably.
 function M.resolve(dir)
     if dir:match("^[~/\\]") or dir:match("^%a:") then
@@ -40,15 +57,35 @@ function M.resolve(dir)
     return vim.fs.normalize("~/" .. dir)
 end
 
--- Resolve the configured dirs and keep those that exist as directories,
--- labelled by their basename.
-local function tracked_dirs()
+-- Normalize one dirs entry (string or table) into
+-- { path, tag, kind = "scan" | "single" | "file" }, or nil if malformed.
+local function parse_entry(raw)
+    local entry = type(raw) == "string" and { raw } or raw
+    if type(entry) ~= "table" or type(entry[1]) ~= "string" then return nil end
+    local path = M.resolve(entry[1])
+    local kind = entry.file and "file" or entry.single and "single" or "scan"
+    local tag = entry.tag
+    if not tag then
+        -- the containing directory names the category, in every kind
+        tag = vim.fs.basename(kind == "scan" and path or vim.fs.dirname(path))
+    end
+    return { path = path, tag = tag, kind = kind }
+end
+
+-- Parse the configured entries and keep those that exist with the right
+-- type; complain about malformed ones instead of dropping them silently.
+local function tracked_entries()
     local out = {}
-    for _, dir in ipairs(config.dirs) do
-        local path = M.resolve(dir)
-        local stat = vim.uv.fs_stat(path)
-        if stat and stat.type == "directory" then
-            out[#out + 1] = { path = path, label = vim.fs.basename(path) }
+    for _, raw in ipairs(config.dirs) do
+        local entry = parse_entry(raw)
+        if not entry then
+            vim.notify("projects: ignoring malformed dirs entry: "
+                .. vim.inspect(raw, { newline = " ", indent = "" }), vim.log.levels.WARN)
+        else
+            local stat = vim.uv.fs_stat(entry.path)
+            if stat and stat.type == (entry.kind == "file" and "file" or "directory") then
+                out[#out + 1] = entry
+            end
         end
     end
     return out
@@ -71,7 +108,7 @@ local function override_dirs()
     if type(dirs) == "table" and #dirs > 0 then return dirs end
 end
 
--- Non-hidden subdirectory names of one tracked dir, sorted; symlinks count
+-- Non-hidden subdirectory names of one scanned dir, sorted; symlinks count
 -- when they resolve to directories.
 local function project_names(path)
     local names = {}
@@ -92,36 +129,48 @@ local function project_names(path)
     return names
 end
 
--- Picker items for every project under the tracked dirs, grouped in
--- configured order. Labels are padded into a column, which also lets the
--- fuzzy matcher treat label and name as separate segments.
-function M.items()
-    local dirs = tracked_dirs()
+-- Picker items for the given entries, in configured order (scanned dirs
+-- expand to their projects in place). Tags are padded into a column, which
+-- also lets the fuzzy matcher treat tag and name as separate segments.
+local function build_items(entries)
     local width = 0
-    for _, dir in ipairs(dirs) do
-        width = math.max(width, #dir.label)
+    for _, entry in ipairs(entries) do
+        width = math.max(width, #entry.tag)
     end
     local items = {}
-    for _, dir in ipairs(dirs) do
-        for _, name in ipairs(project_names(dir.path)) do
-            items[#items + 1] = {
-                display = ("%-" .. width .. "s  %s"):format(dir.label, name),
-                label = dir.label,
-                name = name,
-                path = vim.fs.joinpath(dir.path, name),
-            }
+    local function add(entry, name, path)
+        items[#items + 1] = {
+            display = ("%-" .. width .. "s  %s"):format(entry.tag, name),
+            tag = entry.tag,
+            name = name,
+            path = path,
+            file = entry.kind == "file" or nil,
+        }
+    end
+    for _, entry in ipairs(entries) do
+        if entry.kind == "scan" then
+            for _, name in ipairs(project_names(entry.path)) do
+                add(entry, name, vim.fs.joinpath(entry.path, name))
+            end
+        else
+            add(entry, vim.fs.basename(entry.path), entry.path)
         end
     end
     return items
 end
 
+function M.items()
+    return build_items(tracked_entries())
+end
+
 function M.open()
-    if #tracked_dirs() == 0 then
+    local entries = tracked_entries()
+    if #entries == 0 then
         vim.notify("projects: no tracked directory exists (setup{ dirs = ... })",
             vim.log.levels.WARN)
         return
     end
-    local items = M.items()
+    local items = build_items(entries)
     if #items == 0 then
         vim.notify("projects: no projects under the tracked directories",
             vim.log.levels.WARN)
@@ -131,6 +180,10 @@ function M.open()
         title = " Projects ",
         items = items,
         on_select = function(item)
+            if item.file then
+                util.open_file(item.path)
+                return
+            end
             vim.cmd("cd " .. vim.fn.fnameescape(item.path))
             vim.notify("projects: cd " .. item.path)
         end,

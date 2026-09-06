@@ -16,6 +16,8 @@
 --   2. the projects section of overrides.lua (a gitignored, per-machine
 --      file, same shape graphical/ uses):
 --          return { projects = { dirs = { "Uni", "~/Work" } } }
+--      overwrite_defaults = false next to dirs appends the list to
+--      M.default_dirs instead of replacing it
 --   3. M.default_dirs
 --
 -- A dirs entry is a path string, scanned for subdirectory projects and
@@ -107,7 +109,11 @@ local function override_dirs()
     end
     if type(overrides) ~= "table" or type(overrides.projects) ~= "table" then return end
     local dirs = overrides.projects.dirs
-    if type(dirs) == "table" and #dirs > 0 then return dirs end
+    if type(dirs) ~= "table" or #dirs == 0 then return end
+    if overrides.projects.overwrite_defaults == false then
+        return vim.list_extend(vim.list_extend({}, M.default_dirs), dirs)
+    end
+    return dirs
 end
 
 -- Non-hidden subdirectory names of one scanned dir, sorted; symlinks count

@@ -193,6 +193,26 @@ eq("empty overrides dirs fall back", projects.items()[1].name, "blinky")
 package.loaded["neo.overrides"] = { graphical = { font_size = 18 } }
 projects.setup({})
 eq("no projects section falls back", projects.items()[1].name, "blinky")
+
+-- overwrite_defaults = false appends the overrides list to the defaults;
+-- true (and unset, above) replaces
+projects.default_dirs = { tmp .. "/Alpha" }
+package.loaded["neo.overrides"] = { projects = {
+    dirs = { { tmp .. "/Embedded/blinky", single = true, tag = "Pinned" } },
+    overwrite_defaults = false,
+} }
+projects.setup({})
+items = projects.items()
+eq("append mode count", #items, (link_ok and 3 or 2) + 1)
+eq("append mode defaults first", items[1].name, "beta")
+eq("append mode appended last", items[#items].tag, "Pinned")
+eq("append mode leaves default_dirs alone", #projects.default_dirs, 1)
+package.loaded["neo.overrides"] = { projects = {
+    dirs = { tmp .. "/Embedded" },
+    overwrite_defaults = true,
+} }
+projects.setup({})
+eq("explicit overwrite replaces", #projects.items(), 1)
 projects.default_dirs = saved_defaults
 
 -- open() refuses politely instead of showing an empty picker

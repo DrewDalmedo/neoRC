@@ -35,14 +35,14 @@ local util = require("neo.plugins.picker.util")
 
 local M = {}
 
--- Tracked when neither setup{dirs} nor overrides.lua gives a set. The
--- Neovim config dir rides along as a single project from wherever this
--- platform keeps it (~/.config/nvim, ~/AppData/Local/nvim, ...).
+-- Tracked when neither setup{dirs} nor overrides.lua gives a set. The neo
+-- config rides along as a single project from wherever this platform keeps
+-- it (~/.config/nvim/lua/neo, ~/AppData/Local/nvim/lua/neo, ...).
 M.default_dirs = {
     "Documents",
     "Projects",
     "Personal",
-    { vim.fn.stdpath("config"), single = true, tag = "Config" },
+    { vim.fs.joinpath(vim.fn.stdpath("config"), "lua/neo"), single = true, tag = "Config" },
 }
 
 local config = { dirs = M.default_dirs }

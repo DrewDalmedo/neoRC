@@ -45,7 +45,8 @@ local saved_notify = vim.notify
 eq("default dir 1", projects.default_dirs[1], "Documents")
 eq("default dir 2", projects.default_dirs[2], "Projects")
 eq("default dir 3", projects.default_dirs[3], "Personal")
-eq("default nvim config path", projects.default_dirs[4][1], vim.fn.stdpath("config"))
+eq("default nvim config path", projects.default_dirs[4][1],
+    vim.fs.joinpath(vim.fn.stdpath("config"), "lua/neo"))
 eq("default nvim config single", projects.default_dirs[4].single, true)
 eq("default nvim config tag", projects.default_dirs[4].tag, "Config")
 eq("default dir count", #projects.default_dirs, 4)

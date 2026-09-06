@@ -171,19 +171,27 @@ items = projects.items()
 eq("override count", #items, 1)
 eq("override display", items[1].display, "Embedded  blinky")
 
--- the projects section of overrides.lua supplies the set when setup() gets
--- no dirs, and an explicit setup{dirs} still wins over it
-package.loaded["neo.overrides"] = { projects = { dirs = { tmp .. "/Embedded" } } }
+-- the projects section of overrides.lua supplies extra dirs when setup()
+-- gets none: by default they append to M.default_dirs, and an explicit
+-- setup{dirs} still wins over both (default_dirs is patched to the
+-- fixture so the merge is observable)
+local saved_defaults = projects.default_dirs
+projects.default_dirs = { tmp .. "/Alpha" }
+package.loaded["neo.overrides"] = { projects = { dirs = {
+    { tmp .. "/Embedded/blinky", single = true, tag = "Pinned" },
+} } }
 projects.setup({})
 items = projects.items()
-eq("overrides.lua count", #items, 1)
-eq("overrides.lua item", items[1].name, "blinky")
-projects.setup({ dirs = { tmp .. "/Alpha" } })
-eq("setup dirs beat overrides.lua", projects.items()[1].tag, "Alpha")
+eq("overrides.lua merge count", #items, (link_ok and 3 or 2) + 1)
+eq("overrides.lua defaults first", items[1].name, "beta")
+eq("overrides.lua dirs appended last", items[#items].tag, "Pinned")
+eq("merge leaves default_dirs alone", #projects.default_dirs, 1)
+projects.setup({ dirs = { tmp .. "/Embedded" } })
+items = projects.items()
+eq("setup dirs beat overrides.lua and defaults", #items, 1)
+eq("setup dirs item", items[1].name, "blinky")
 
 -- an empty or missing dirs list in overrides.lua means "use the defaults"
--- (default_dirs is patched to the fixture so the fallback is observable)
-local saved_defaults = projects.default_dirs
 projects.default_dirs = { tmp .. "/Embedded" }
 package.loaded["neo.overrides"] = { projects = { dirs = {} } }
 projects.setup({})
@@ -192,8 +200,8 @@ package.loaded["neo.overrides"] = { graphical = { font_size = 18 } }
 projects.setup({})
 eq("no projects section falls back", projects.items()[1].name, "blinky")
 
--- overwrite_defaults = false appends the overrides list to the defaults;
--- true (and unset, above) replaces
+-- overwrite_defaults = false matches the unset default (append, above);
+-- only overwrite_defaults = true replaces the defaults
 projects.default_dirs = { tmp .. "/Alpha" }
 package.loaded["neo.overrides"] = { projects = {
     dirs = { { tmp .. "/Embedded/blinky", single = true, tag = "Pinned" } },
@@ -201,10 +209,9 @@ package.loaded["neo.overrides"] = { projects = {
 } }
 projects.setup({})
 items = projects.items()
-eq("append mode count", #items, (link_ok and 3 or 2) + 1)
-eq("append mode defaults first", items[1].name, "beta")
-eq("append mode appended last", items[#items].tag, "Pinned")
-eq("append mode leaves default_dirs alone", #projects.default_dirs, 1)
+eq("explicit append count", #items, (link_ok and 3 or 2) + 1)
+eq("explicit append defaults first", items[1].name, "beta")
+eq("explicit append appended last", items[#items].tag, "Pinned")
 package.loaded["neo.overrides"] = { projects = {
     dirs = { tmp .. "/Embedded" },
     overwrite_defaults = true,

@@ -7,15 +7,24 @@ local state = {
     items = {}, filtered = {},
     selected = 1, mode = "files",
     job_id = nil,
-    ns_id = vim.api.nvim_create_namespace("scope_picker"),
+    gen = 0,
 }
 
 -- Create grep augroup once at require-time
 local GREP_AUGROUP = vim.api.nvim_create_augroup("ScopeGrep", { clear = true })
 
--- Fuzzy Matcher 
+local MAX_RESULTS_SHOWN = 500
+local MAX_GREP_RESULTS = 1000
+local MIN_GREP_CHARS = 2
+
+-- Fuzzy Matcher
+local SEGMENT_SEPS = {
+    ["/"] = true, ["\\"] = true, ["_"] = true,
+    ["-"] = true, ["."] = true, [" "] = true,
+}
+
 local function fuzzy_score(str, pattern)
-    if not pattern or pattern == "" then return 1, {} end
+    if not pattern or pattern == "" then return 1 end
     local s, p = str:lower(), pattern:lower()
     local p_idx, score, consec = 1, 0, 0
 
@@ -24,16 +33,21 @@ local function fuzzy_score(str, pattern)
             p_idx = p_idx + 1
             consec = consec + 1
             score = score + 10 + consec
+            if i == 1 or SEGMENT_SEPS[s:sub(i - 1, i - 1)] then
+                score = score + 8
+            end
             if p_idx > #p then break end
         else
             consec = 0
         end
     end
 
-    return p_idx <= #p and 0 or score, {}
+    if p_idx <= #p then return 0 end
+    -- Length penalty breaks ties toward shorter paths; clamp so a match stays > 0
+    return math.max(score - #s * 0.05, 1)
 end
 
--- Debounce Helper (self-contained timer per instance) 
+-- Debounce Helper (self-contained timer per instance)
 local function debounce(ms, fn)
     local timer = vim.uv.new_timer()
     return function(...)
@@ -43,13 +57,18 @@ local function debounce(ms, fn)
     end
 end
 
--- UI Management 
+-- UI Management
 local function close_picker()
+    state.gen = state.gen + 1
     if vim.api.nvim_get_mode().mode:match("i") then vim.cmd("stopinsert") end
-    if state.job_id then vim.fn.jobstop(state.job_id) end
+    if state.job_id then
+        vim.fn.jobstop(state.job_id)
+        state.job_id = nil
+    end
     for _, win in ipairs({ state.prompt_win, state.results_win }) do
         if win and vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
     end
+    state.prompt_win, state.results_win = nil, nil
     state.items, state.filtered, state.selected = {}, {}, 1
 end
 
@@ -76,50 +95,62 @@ local function create_ui(title)
 
     vim.api.nvim_set_option_value("filetype", "scope_prompt", { buf = state.prompt_buf })
     vim.api.nvim_set_option_value("filetype", "scope_results", { buf = state.results_buf })
+    vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = state.prompt_buf })
+    vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = state.results_buf })
     vim.api.nvim_set_option_value("cursorline", true, { win = state.results_win })
     vim.api.nvim_set_option_value("wrap", false, { win = state.results_win })
     vim.api.nvim_set_option_value("scrolloff", 999, { win = state.results_win })
     vim.cmd("startinsert")
 end
 
--- Rendering 
+-- Rendering
 local function render_results()
-    if not state.results_buf or not vim.api.nvim_buf_is_valid(state.results_buf) then return end
-    vim.api.nvim_buf_clear_namespace(state.results_buf, state.ns_id, 0, -1)
+    if not (state.results_buf and vim.api.nvim_buf_is_valid(state.results_buf)) then return end
     local lines = {}
     for i, item in ipairs(state.filtered) do
         lines[i] = (i == state.selected and "▸ " or "  ") .. item.display
     end
     vim.api.nvim_buf_set_lines(state.results_buf, 0, -1, false, lines)
-    if state.filtered[state.selected] then
+    if state.filtered[state.selected]
+        and state.results_win and vim.api.nvim_win_is_valid(state.results_win) then
         vim.api.nvim_win_set_cursor(state.results_win, { state.selected, 0 })
     end
 end
 
 local debounced_filter = debounce(30, function()
+    if not (state.prompt_buf and vim.api.nvim_buf_is_valid(state.prompt_buf)) then return end
     local prompt = vim.api.nvim_buf_get_lines(state.prompt_buf, 0, 1, false)[1] or ""
     prompt = prompt:match("^%s*(.-)%s*$")
 
     state.selected = 1
 
-    if state.mode == "grep" then
-        -- Grep results are pre-filtered by rg/grep. Display as-is.
-        state.filtered = state.items
+    if state.mode == "grep" or prompt == "" then
+        -- Grep results are pre-filtered by the search tool; empty prompts keep scan order
+        state.filtered = {}
+        for i = 1, math.min(#state.items, MAX_RESULTS_SHOWN) do
+            state.filtered[i] = state.items[i]
+        end
     else
         local scored = {}
-        for _, item in ipairs(state.items) do
-            local s, _ = fuzzy_score(item.display, prompt)
-            if s > 0 then table.insert(scored, { score = s, item = item }) end
+        for idx, item in ipairs(state.items) do
+            local s = fuzzy_score(item.display, prompt)
+            if s > 0 then table.insert(scored, { score = s, idx = idx, item = item }) end
         end
-        table.sort(scored, function(a, b) return a.score > b.score end)
-        state.filtered = vim.tbl_map(function(x) return x.item end, scored)
+        table.sort(scored, function(a, b)
+            if a.score ~= b.score then return a.score > b.score end
+            return a.idx < b.idx
+        end)
+        state.filtered = {}
+        for i = 1, math.min(#scored, MAX_RESULTS_SHOWN) do
+            state.filtered[i] = scored[i].item
+        end
     end
 
     if #state.filtered == 0 then state.selected = 0 end
     render_results()
 end)
 
--- Input & Keymaps 
+-- Input & Keymaps
 local function setup_keymaps()
     local opts = { buffer = state.prompt_buf, silent = true, nowait = true }
 
@@ -180,15 +211,15 @@ local function setup_keymaps()
     })
 end
 
--- File Finder 
-local function scan_files_async(callback)
+-- File Finder
+local function scan_files_async(gen, on_chunk, on_done)
     local cwd = vim.fn.getcwd()
-    local files = {}
-    local queue = { cwd }
+    local queue = { { path = cwd, rel = "", depth = 0 } }
     local idx = 1
     local count = 0
     local max_files = 50000
     local max_depth = 12
+    local entries_per_tick = 1000
 
     local ignore = {
         [".git"] = true, [".svn"] = true, [".hg"] = true,
@@ -198,99 +229,138 @@ local function scan_files_async(callback)
         ["dist"] = true, ["build"] = true, [".next"] = true,
     }
 
-    local depths = { [cwd] = 0 }
-
     local step
     step = function()
+        if gen ~= state.gen then return end
+        local chunk = {}
+        local processed = 0
+
         while idx <= #queue do
             local dir = queue[idx]
-            local dir_depth = depths[dir] or 0
             idx = idx + 1
 
-            if dir_depth >= max_depth then goto continue end
-
-            local ok, iter_fn, iter_state, iter_var = pcall(vim.fs.dir, dir)
-            if not ok then goto continue end
-
-            for name, type in iter_fn, iter_state, iter_var do
-                if type == "directory" then
-                    if not ignore[name] then
-                        local next_path = vim.fs.joinpath(dir, name)
-                        table.insert(queue, next_path)
-                        depths[next_path] = dir_depth + 1
+            if dir.depth < max_depth then
+                -- pcall covers both unreadable dirs and errors raised mid-iteration
+                pcall(function()
+                    for name, type in vim.fs.dir(dir.path) do
+                        processed = processed + 1
+                        local rel = dir.rel == "" and name or (dir.rel .. "/" .. name)
+                        if type == "directory" then
+                            if not ignore[name] then
+                                table.insert(queue, {
+                                    path = vim.fs.joinpath(dir.path, name),
+                                    rel = rel, depth = dir.depth + 1,
+                                })
+                            end
+                        elseif type == "file" or type == "link" then
+                            count = count + 1
+                            table.insert(chunk, rel)
+                        end
                     end
-                elseif type == "file" or type == "link" then
-                    local full_path = vim.fs.joinpath(dir, name)
-                    table.insert(files, vim.fs.normalize(full_path))
-                    count = count + 1
-                    if count >= max_files then
-                        callback(files)
-                        return
-                    end
-                    if count % 1000 == 0 then
-                        vim.schedule(step)
-                        return
-                    end
+                end)
+                if count >= max_files then
+                    on_chunk(chunk)
+                    on_done()
+                    return
                 end
             end
-            ::continue::
+
+            -- Yield only between directories: an interrupted iterator would drop entries
+            if processed >= entries_per_tick then
+                if #chunk > 0 then on_chunk(chunk) end
+                vim.schedule(step)
+                return
+            end
         end
-        callback(files)
+
+        if #chunk > 0 then on_chunk(chunk) end
+        on_done()
     end
     step()
 end
 
--- Live Grep 
-local function run_grep_async(query, on_line, on_exit)
-    local cwd = vim.fn.getcwd()
-    local cmd
+-- Live Grep
+local function build_grep_cmd(query)
     if vim.fn.executable("rg") == 1 then
-        cmd = { "rg", "--vimgrep", "--no-heading", "--color=never", "--", query }
+        -- The explicit "." matters: without a path, rg searches stdin when it isn't a tty
+        return { "rg", "--vimgrep", "--no-heading", "--color=never", "--", query, "." }, true
     elseif vim.fn.has("win32") == 1 and vim.fn.executable("findstr") == 1 then
-        cmd = { "findstr", "/s", "/n", "/c:" .. query, "*" }
+        return { "findstr", "/s", "/n", "/c:" .. query, "*" }, false
     else
-        cmd = { "grep", "-rn", "--color=never", "--", query, "." }
+        return { "grep", "-rn", "--exclude-dir=.git", "--color=never", "--", query, "." }, false
+    end
+end
+
+-- rg emits file:line:col:text; grep/findstr emit file:line:text (column defaults to 1)
+local function parse_grep_line(line, has_col)
+    -- Split a leading Windows drive off first so its colon can't confuse the field split
+    local drive, rest = line:match("^(%a:)([\\/].*)$")
+    if not drive then drive, rest = "", line end
+    local file, lnum, col, text
+    if has_col then
+        file, lnum, col, text = rest:match("^(.-):(%d+):(%d+):(.*)$")
+    else
+        file, lnum, text = rest:match("^(.-):(%d+):(.*)$")
+    end
+    if not file or file == "" then return nil end
+    file = file:gsub("^%.[/\\]", "")
+    if file == "" then return nil end
+    return drive .. file, tonumber(lnum), tonumber(col) or 1, text
+end
+
+local function run_grep_async(gen, query, on_match)
+    local cmd, has_col = build_grep_cmd(query)
+    local line_buf = ""
+    local job_id
+
+    local function emit(line)
+        line = line:gsub("\r$", "")
+        if line == "" then return end
+        local file, lnum, col, text = parse_grep_line(line, has_col)
+        if file then on_match(file, lnum, col, text) end
     end
 
-    local line_buf = ""
-    state.job_id = vim.fn.jobstart(cmd, {
-        cwd = cwd,
+    job_id = vim.fn.jobstart(cmd, {
+        cwd = vim.fn.getcwd(),
+        stdin = "null",
         stdout_buffered = false,
+        -- on_stdout data is a list of line pieces; first/last may be partial (:h channel-lines)
         on_stdout = function(_, data)
-            if not data then return end
-            for _, chunk in ipairs(data) do
-                line_buf = line_buf .. chunk
-                while true do
-                    local nl = line_buf:find("\n", 1, true)
-                    if not nl then break end
-                    local line = line_buf:sub(1, nl - 1):gsub("\r$", "")
-                    line_buf = line_buf:sub(nl + 1)
-                    if line ~= "" then on_line(line) end
-                end
-            end
+            if gen ~= state.gen or state.job_id ~= job_id then return end
+            if not data or #data == 0 then return end
+            data[1] = line_buf .. data[1]
+            line_buf = table.remove(data) or ""
+            for _, line in ipairs(data) do emit(line) end
         end,
         on_stderr = function(_, data)
+            if gen ~= state.gen or state.job_id ~= job_id then return end
             if data and data[1] and data[1] ~= "" then
                 vim.notify("Scope grep stderr: " .. data[1], vim.log.levels.WARN)
             end
         end,
-        on_exit = function(_, code) on_exit(code) end,
+        on_exit = function(_, _)
+            if gen ~= state.gen or state.job_id ~= job_id then return end
+            if line_buf ~= "" then emit(line_buf) end
+            state.job_id = nil
+        end,
     })
 
-    if state.job_id <= 0 then
+    if job_id <= 0 then
         vim.notify("Scope: Failed to start grep job. Check PATH.", vim.log.levels.ERROR)
+        return
     end
+    state.job_id = job_id
 end
 
--- Actions 
+-- Actions
 local function open_file(path, line, col)
     vim.cmd("edit " .. vim.fn.fnameescape(path))
     if line and col then
-        vim.api.nvim_win_set_cursor(0, { line, col - 1 })
+        pcall(vim.api.nvim_win_set_cursor, 0, { line, math.max(col - 1, 0) })
     end
 end
 
--- Public API 
+-- Public API
 function M.find_files()
     state.mode = "files"
     state.items = {}
@@ -298,14 +368,24 @@ function M.find_files()
     setup_keymaps()
     vim.cmd("startinsert!")
 
-    scan_files_async(function(files)
-        state.items = vim.tbl_map(function(f)
-            local rel = vim.fs.normalize(vim.fn.fnamemodify(f, ":.:"))
-            return { display = rel, action = function() open_file(f) end }
-        end, files)
+    local cwd = vim.fn.getcwd()
+    local gen = state.gen
+    scan_files_async(gen, function(chunk)
+        for _, rel in ipairs(chunk) do
+            local full = vim.fs.normalize(vim.fs.joinpath(cwd, rel))
+            table.insert(state.items, {
+                display = rel,
+                action = function() open_file(full) end,
+            })
+        end
         debounced_filter()
-    end)
+    end, debounced_filter)
 end
+
+local do_grep_restart = nil
+local debounced_grep = debounce(120, function()
+    if do_grep_restart then do_grep_restart() end
+end)
 
 function M.live_grep()
     state.mode = "grep"
@@ -314,33 +394,57 @@ function M.live_grep()
     setup_keymaps()
     vim.cmd("startinsert!")
 
+    local cwd = vim.fn.getcwd()
+    local gen = state.gen
+    local prompt_buf = state.prompt_buf
     local seen = {}
-    local add_line = function(line)
-        if seen[line] then return end
-        seen[line] = true
-        -- Greedy .+ backtracks to match the last :line:col: pair, safely handling Windows drives & colons in paths
-        local file, lnum, col, text = line:match("^(.+):(%d+):(%d+):(.*)$")
-        if not file then return end
-        local full_path = vim.fs.normalize(vim.fn.joinpath(vim.fn.getcwd(), file))
+
+    local add_match = function(file, lnum, col, text)
+        if #state.items >= MAX_GREP_RESULTS then
+            if state.job_id then
+                vim.fn.jobstop(state.job_id)
+                state.job_id = nil
+            end
+            return
+        end
+        local key = file .. ":" .. lnum .. ":" .. col
+        if seen[key] then return end
+        seen[key] = true
+        local full_path
+        if file:match("^[\\/]") or file:match("^%a:[\\/]") then
+            full_path = vim.fs.normalize(file)
+        else
+            full_path = vim.fs.normalize(vim.fs.joinpath(cwd, file))
+        end
         table.insert(state.items, {
-            display = string.format("%s:%s:%s  %s", file, lnum, col, text),
-            action = function() open_file(full_path, tonumber(lnum), tonumber(col)) end,
+            display = string.format("%s:%d:%d  %s", file, lnum, col, text),
+            action = function() open_file(full_path, lnum, col) end,
         })
         debounced_filter()
     end
 
-    vim.api.nvim_clear_autocmds({ group = GREP_AUGROUP, buffer = state.prompt_buf })
+    do_grep_restart = function()
+        if gen ~= state.gen or state.mode ~= "grep" then return end
+        if not vim.api.nvim_buf_is_valid(prompt_buf) then return end
+        local query = vim.api.nvim_buf_get_lines(prompt_buf, 0, 1, false)[1] or ""
+        query = query:match("^%s*(.-)%s*$")
+        if state.job_id then
+            vim.fn.jobstop(state.job_id)
+            state.job_id = nil
+        end
+        state.items, seen = {}, {}
+        if #query < MIN_GREP_CHARS then
+            debounced_filter()
+            return
+        end
+        run_grep_async(gen, query, add_match)
+    end
+
+    vim.api.nvim_clear_autocmds({ group = GREP_AUGROUP, buffer = prompt_buf })
     vim.api.nvim_create_autocmd("TextChangedI", {
         group = GREP_AUGROUP,
-        buffer = state.prompt_buf,
-        callback = function()
-            local query = vim.api.nvim_buf_get_lines(state.prompt_buf, 0, 1, false)[1] or ""
-            query = query:match("^%s*(.-)%s*$")
-            if #query < 2 then return end
-            if state.job_id then vim.fn.jobstop(state.job_id) end
-            state.items, seen = {}, {}
-            run_grep_async(query, add_line, function() end)
-        end,
+        buffer = prompt_buf,
+        callback = debounced_grep,
     })
 end
 
@@ -348,5 +452,10 @@ function M.setup()
     vim.api.nvim_create_user_command("ScopeFiles", M.find_files, { desc = "Scope: Find Files" })
     vim.api.nvim_create_user_command("ScopeGrep", M.live_grep, { desc = "Scope: Live Grep" })
 end
+
+-- exposed for tests
+M._fuzzy_score = fuzzy_score
+M._parse_grep_line = parse_grep_line
+M._state = state
 
 return M

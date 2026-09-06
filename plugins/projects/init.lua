@@ -8,8 +8,12 @@
 --   Projects   neo           <- ~/Projects/neo
 --
 -- The fuzzy prompt matches the whole line, so a query can hit the project
--- name, the tag, or both ("emb bl"). <CR> cds into the selected project
--- (or opens it, for file entries).
+-- name, the tag, or both ("emb bl"). <CR> switches into the selected
+-- project: every open buffer is killed (modified buffers backed by a real
+-- file are saved first; scratch, terminal, and unnamed buffers are
+-- discarded), spare tabs and windows are closed, the working directory
+-- moves, and the remaining window shows a netrw listing of the project
+-- root. File entries skip all of that; <CR> just opens the file.
 --
 -- The tracked set is decided at setup(), first hit wins:
 --   1. setup({ dirs = ... })
@@ -184,6 +188,49 @@ function M.items()
     return build_items(tracked_entries())
 end
 
+-- Make `path` (resolved like a dirs entry) the active project. Every open
+-- buffer is killed so nothing from the old project lingers: modified
+-- buffers backed by a real file are saved first, while scratch, terminal,
+-- and unnamed buffers have nowhere to be saved and are discarded. A buffer
+-- whose write fails is kept alive (and complained about) rather than
+-- losing its changes. Spare tabs and windows are closed, the working
+-- directory moves, and the surviving window ends up on a fresh netrw
+-- listing of the project root.
+function M.switch(path)
+    path = M.resolve(path)
+    local stat = vim.uv.fs_stat(path)
+    if not stat or stat.type ~= "directory" then
+        vim.notify("projects: not a directory: " .. path, vim.log.levels.ERROR)
+        return
+    end
+    pcall(vim.cmd, "silent tabonly!")
+    pcall(vim.cmd, "silent only!")
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_valid(buf) then
+            local keep = false
+            if vim.bo[buf].modified then
+                local file = vim.api.nvim_buf_get_name(buf)
+                if vim.bo[buf].buftype == "" and file ~= "" then
+                    local ok, err = pcall(vim.api.nvim_buf_call, buf, function()
+                        vim.cmd("silent write")
+                    end)
+                    if not ok then
+                        keep = true
+                        vim.notify(("projects: keeping %s, save failed:\n%s"):format(file, err),
+                            vim.log.levels.ERROR)
+                    end
+                end
+            end
+            if not keep then
+                pcall(vim.api.nvim_buf_delete, buf, { force = true })
+            end
+        end
+    end
+    vim.cmd("cd " .. vim.fn.fnameescape(path))
+    vim.cmd("Explore " .. vim.fn.fnameescape(path))
+    vim.notify("projects: switched to " .. path)
+end
+
 function M.open()
     local entries = tracked_entries()
     if #entries == 0 then
@@ -205,8 +252,7 @@ function M.open()
                 util.open_file(item.path)
                 return
             end
-            vim.cmd("cd " .. vim.fn.fnameescape(item.path))
-            vim.notify("projects: cd " .. item.path)
+            M.switch(item.path)
         end,
     })
 end

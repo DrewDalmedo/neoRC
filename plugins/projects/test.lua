@@ -241,6 +241,80 @@ table.remove(searchers, 1)
 package.loaded["neo.overrides"] = nil
 eq("broken overrides.lua reported", notified ~= nil and notified:find("boom") ~= nil, true)
 
+-- switch() kills every open buffer (saving the file-backed modified ones),
+-- collapses tabs and windows, cds, and lands in netrw on the project root.
+-- nvim -l skips plugin files, so pull netrw in by hand first.
+vim.cmd("runtime! plugin/netrwPlugin.vim")
+local orig_cwd = vim.fn.getcwd()
+local function norm_dir(path)
+    -- realpath: macOS tempdirs live behind a /var -> /private/var symlink,
+    -- and :cd reports the resolved form
+    path = vim.uv.fs_realpath(path) or path
+    return (vim.fs.normalize(path):gsub("/+$", ""))
+end
+
+local dirty_file = tmp .. "/Alpha/dirty.txt"
+vim.cmd("edit " .. vim.fn.fnameescape(dirty_file))
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "saved on switch" })
+local dirty_buf = vim.api.nvim_get_current_buf()
+vim.cmd("vsplit " .. vim.fn.fnameescape(tmp .. "/Alpha/notes.txt"))
+local clean_buf = vim.api.nvim_get_current_buf()
+vim.cmd("tabnew")
+local scratch_buf = vim.api.nvim_create_buf(true, true)
+vim.api.nvim_buf_set_lines(scratch_buf, 0, -1, false, { "scratch junk" })
+vim.api.nvim_set_current_buf(scratch_buf)
+vim.cmd("terminal")
+local term_buf = vim.api.nvim_get_current_buf()
+vim.cmd("enew")
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "unnamed junk" })
+local unnamed_buf = vim.api.nvim_get_current_buf()
+
+vim.notify = function() end
+projects.switch(tmp .. "/Embedded/blinky")
+vim.notify = saved_notify
+
+eq("switch cwd", norm_dir(vim.fn.getcwd()), norm_dir(tmp .. "/Embedded/blinky"))
+eq("switch one tab", vim.fn.tabpagenr("$"), 1)
+eq("switch one window", #vim.api.nvim_list_wins(), 1)
+eq("switch killed saved buffer", vim.api.nvim_buf_is_valid(dirty_buf), false)
+eq("switch killed clean buffer", vim.api.nvim_buf_is_valid(clean_buf), false)
+eq("switch killed scratch buffer", vim.api.nvim_buf_is_valid(scratch_buf), false)
+eq("switch killed terminal buffer", vim.api.nvim_buf_is_valid(term_buf), false)
+eq("switch killed unnamed buffer", vim.api.nvim_buf_is_valid(unnamed_buf), false)
+local written = io.open(dirty_file, "r")
+eq("switch saved modified file", written and written:read("*l"), "saved on switch")
+if written then written:close() end
+eq("switch lands in netrw", vim.bo.filetype, "netrw")
+eq("switch netrw shows project root",
+    norm_dir(vim.api.nvim_buf_get_name(0)), norm_dir(tmp .. "/Embedded/blinky"))
+
+-- a modified buffer whose write fails survives the sweep with its changes
+-- (and a complaint) while the rest of the switch still happens
+vim.cmd("edit " .. vim.fn.fnameescape(tmp .. "/gone/nested/file.txt"))
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "unwritable" })
+local kept_buf = vim.api.nvim_get_current_buf()
+notified = ""
+vim.notify = function(msg) notified = notified .. "\n" .. msg end
+projects.switch(tmp .. "/Alpha")
+vim.notify = saved_notify
+eq("failed save keeps buffer", vim.api.nvim_buf_is_valid(kept_buf), true)
+eq("failed save keeps changes", vim.bo[kept_buf].modified, true)
+eq("failed save reported", notified:find("save failed", 1, true) ~= nil, true)
+eq("failed save still cds", norm_dir(vim.fn.getcwd()), norm_dir(tmp .. "/Alpha"))
+eq("failed save still lands in netrw", vim.bo.filetype, "netrw")
+
+-- switching to a missing directory refuses before killing anything
+vim.cmd("edit " .. vim.fn.fnameescape(tmp .. "/Alpha/notes.txt"))
+local survivor_buf = vim.api.nvim_get_current_buf()
+notified = ""
+vim.notify = function(msg) notified = notified .. "\n" .. msg end
+projects.switch(tmp .. "/Missing")
+vim.notify = saved_notify
+eq("missing dir warns", notified:find("not a directory", 1, true) ~= nil, true)
+eq("missing dir keeps buffers", vim.api.nvim_buf_is_valid(survivor_buf), true)
+eq("missing dir keeps cwd", norm_dir(vim.fn.getcwd()), norm_dir(tmp .. "/Alpha"))
+
+vim.cmd("cd " .. vim.fn.fnameescape(orig_cwd))
 vim.fn.delete(tmp, "rf")
 
 if failures > 0 then

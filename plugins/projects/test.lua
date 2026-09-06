@@ -40,17 +40,15 @@ end
 local notified
 local saved_notify = vim.notify
 
--- the default tracked set: home-relative names plus the platform's own
+-- the default tracked set: home-relative Projects plus the platform's own
 -- Neovim config dir as a single pinned project
-eq("default dir 1", projects.default_dirs[1], "Documents")
-eq("default dir 2", projects.default_dirs[2], "Projects")
-eq("default dir 3", projects.default_dirs[3], "Personal")
-eq("default nvim config path", projects.default_dirs[4][1],
+eq("default dir 1", projects.default_dirs[1], "Projects")
+eq("default nvim config path", projects.default_dirs[2][1],
     vim.fs.joinpath(vim.fn.stdpath("config"), "lua/neo"))
-eq("default nvim config single", projects.default_dirs[4].single, true)
-eq("default nvim config tag", projects.default_dirs[4].tag, "Config")
-eq("default nvim config name", projects.default_dirs[4].name, "Neo")
-eq("default dir count", #projects.default_dirs, 4)
+eq("default nvim config single", projects.default_dirs[2].single, true)
+eq("default nvim config tag", projects.default_dirs[2].tag, "Neovim")
+eq("default nvim config name", projects.default_dirs[2].name, "Config")
+eq("default dir count", #projects.default_dirs, 2)
 
 -- resolve: no prefix means home-relative; ~, /, \\ and drive paths pass
 -- through (backslash and drive forms only flip separators on Windows, so

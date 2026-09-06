@@ -43,10 +43,8 @@ local M = {}
 -- config rides along as a single project from wherever this platform keeps
 -- it (~/.config/nvim/lua/neo, ~/AppData/Local/nvim/lua/neo, ...).
 M.default_dirs = {
-    "Documents",
     "Projects",
-    "Personal",
-    { vim.fs.joinpath(vim.fn.stdpath("config"), "lua/neo"), single = true, tag = "Config", name = "Neo" },
+    { vim.fs.joinpath(vim.fn.stdpath("config"), "lua/neo"), single = true, tag = "Neovim", name = "Config" },
 }
 
 local config = { dirs = M.default_dirs }

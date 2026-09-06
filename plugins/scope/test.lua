@@ -99,6 +99,111 @@ out = fuzzy.filter({ { name = "abc" }, { name = "xyz" } }, "b",
 eq("filter custom key count", #out, 1)
 eq("filter custom key match", out[1].name, "abc")
 
+-- gitignore rule semantics: M.match gives one rule list's verdict on a path
+-- relative to the .gitignore's directory (true ignore / false negated / nil
+-- no opinion)
+local gitignore = require("neo.plugins.scope.gitignore")
+local function ig(text, rel, is_dir)
+    return gitignore.match(gitignore.parse(text), rel, is_dir or false)
+end
+
+eq("ig name", ig("foo", "foo"), true)
+eq("ig name at depth", ig("foo", "a/b/foo"), true)
+eq("ig name no substring", ig("foo", "foobar"), nil)
+eq("ig star ext", ig("*.log", "x.log"), true)
+eq("ig star ext deep", ig("*.log", "a/b/x.log"), true)
+eq("ig star no dir cross", ig("*.log", "x.logs"), nil)
+eq("ig dot is literal", ig("*.log", "xzlog"), nil)
+eq("ig question", ig("?.txt", "a.txt"), true)
+eq("ig question one char", ig("?.txt", "ab.txt"), nil)
+eq("ig class", ig("[abc].txt", "b.txt"), true)
+eq("ig class miss", ig("[abc].txt", "d.txt"), nil)
+eq("ig class range", ig("[a-c].txt", "b.txt"), true)
+eq("ig negated class", ig("[!a].txt", "b.txt"), true)
+eq("ig negated class miss", ig("[!a].txt", "a.txt"), nil)
+eq("ig anchored root", ig("/build", "build"), true)
+eq("ig anchored not deep", ig("/build", "src/build"), nil)
+eq("ig inner slash anchors", ig("doc/frotz", "doc/frotz"), true)
+eq("ig inner slash not deep", ig("doc/frotz", "a/doc/frotz"), nil)
+eq("ig dir only on dir", ig("build/", "build", true), true)
+eq("ig dir only on file", ig("build/", "build", false), nil)
+eq("ig doublestar lead", ig("**/foo", "a/b/foo"), true)
+eq("ig doublestar mid zero dirs", ig("a/**/b", "a/b"), true)
+eq("ig doublestar mid deep", ig("a/**/b", "a/x/y/b"), true)
+eq("ig doublestar tail", ig("foo/**", "foo/x/y"), true)
+eq("ig doublestar tail not itself", ig("foo/**", "foo", true), nil)
+eq("ig negation last wins", ig("*.log\n!keep.log", "keep.log"), false)
+eq("ig negation order matters", ig("!keep.log\n*.log", "keep.log"), true)
+eq("ig comment", ig("#foo", "foo"), nil)
+eq("ig escaped hash", ig("\\#foo", "#foo"), true)
+eq("ig trailing space stripped", ig("foo ", "foo"), true)
+eq("ig blank lines skipped", ig("\n\nfoo\n\n", "foo"), true)
+eq("ig crlf endings", ig("a.log\r\nb.log\r\n", "b.log"), true)
+eq("ig lua magic literal", ig("a+b(1).txt", "a+b(1).txt"), true)
+eq("ig percent literal", ig("100%.txt", "100%.txt"), true)
+
+-- nested .gitignore files against a real tree: the checker (used by the
+-- grep fallbacks) and the file scan must agree with git's precedence
+local root = vim.fn.tempname():gsub("\\", "/")
+vim.fn.mkdir(root .. "/src/generated", "p")
+vim.fn.mkdir(root .. "/build", "p")
+local function write_file(rel, text)
+    local f = assert(io.open(root .. "/" .. rel, "w"))
+    f:write(text)
+    f:close()
+end
+write_file(".gitignore", "*.log\n!keep.log\n/build\n")
+write_file("src/.gitignore", "generated/\n!important.log\n")
+write_file("keep.log", "needle keep\n")
+write_file("x.log", "needle x\n")
+write_file("build/out.txt", "needle out\n")
+write_file("src/main.c", "needle main\n")
+write_file("src/other.log", "needle other\n")
+write_file("src/important.log", "needle important\n")
+write_file("src/generated/a.txt", "needle gen\n")
+
+local check = gitignore.checker(root)
+eq("checker keeps plain file", check("src/main.c"), false)
+eq("checker root pattern", check("x.log"), true)
+eq("checker root pattern deep", check("src/other.log"), true)
+eq("checker negation", check("keep.log"), false)
+eq("checker nested negation beats outer", check("src/important.log"), false)
+eq("checker nested dir rule", check("src/generated/a.txt"), true)
+eq("checker anchored dir contents", check("build/out.txt"), true)
+eq("checker windows separators", check("src\\other.log"), true)
+eq("checker absolute path passes", check("/etc/hosts"), false)
+
+-- the file scan applies the same rules and prunes ignored directories
+local files = require("neo.plugins.scope.files")
+local got, scan_done = {}, false
+files.scan_async({ cwd = root }, function(chunk)
+    for _, rel in ipairs(chunk) do got[#got + 1] = rel end
+end, function() scan_done = true end)
+vim.wait(2000, function() return scan_done end)
+eq("scan completed", scan_done, true)
+table.sort(got)
+eq("scan result", table.concat(got, " "),
+    ".gitignore keep.log src/.gitignore src/important.log src/main.c")
+
+-- live grep on the same tree: rg filters natively (--no-require-git makes
+-- that hold outside git repos too); grep/findstr go through opts.ignored
+local hits = {}
+local handle = grep.run("needle", { cwd = root, ignored = gitignore.checker(root) },
+    function(file) hits[#hits + 1] = (file:gsub("\\", "/")) end)
+vim.wait(4000, function() return handle.stopped end)
+eq("grep run finished", handle.stopped, true)
+table.sort(hits)
+eq("grep run hits", table.concat(hits, " "), "keep.log src/important.log src/main.c")
+
+vim.fn.delete(root, "rf")
+
+-- only rg is trusted to enforce .gitignore itself
+local cmd, _, native_ignore = grep.build_cmd("q")
+eq("native ignore only for rg", native_ignore, cmd[1] == "rg")
+if cmd[1] == "rg" then
+    eq("rg ignores outside git repos too", vim.tbl_contains(cmd, "--no-require-git"), true)
+end
+
 if failures > 0 then
     print("FAILURES: " .. failures)
     os.exit(1)

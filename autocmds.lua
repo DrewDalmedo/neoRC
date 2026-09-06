@@ -35,3 +35,13 @@ vim.api.nvim_create_autocmd("TermOpen", {
         vim.opt_local.relativenumber = true
     end,
 })
+
+-- UI
+vim.api.nvim_create_autocmd("UIEnter", {
+    callback = function()
+        -- Neovim-Qt requires this workaround, as vim.g.GuiLoaded is only set after init.lua runs
+        if vim.g.GuiLoaded then
+            require("neo.graphical.nvimqt")
+        end
+    end
+})

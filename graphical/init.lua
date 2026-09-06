@@ -14,6 +14,8 @@ function M.setup()
 
     vim.opt.guifont = font_family .. ":h" .. font_size
 
+    -- NOTE: Neovim-Qt is loaded on UIEnter autocmd. See comment in autocmds.lua for details.
+
     if vim.g.neovide then
         require("neo.graphical.neovide")
     end

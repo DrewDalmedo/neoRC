@@ -191,6 +191,19 @@ items = projects.items()
 eq("setup dirs beat overrides.lua and defaults", #items, 1)
 eq("setup dirs item", items[1].name, "blinky")
 
+-- re-listing a default's path in overrides.lua doesn't duplicate its
+-- projects: the default is dropped and the overrides entry's options win
+projects.default_dirs = { tmp .. "/Alpha", tmp .. "/Embedded" }
+package.loaded["neo.overrides"] = { projects = { dirs = {
+    { tmp .. "/Embedded", tag = "Firmware" },
+} } }
+projects.setup({})
+items = projects.items()
+eq("shadowed default not duplicated", #items, (link_ok and 3 or 2) + 1)
+eq("shadowing entry options win", find(items, "blinky").tag, "Firmware")
+eq("unshadowed defaults kept", find(items, "beta") ~= nil, true)
+eq("shadowing entry takes the overrides slot", items[#items].name, "blinky")
+
 -- an empty or missing dirs list in overrides.lua means "use the defaults"
 projects.default_dirs = { tmp .. "/Embedded" }
 package.loaded["neo.overrides"] = { projects = { dirs = {} } }

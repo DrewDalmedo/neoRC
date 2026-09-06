@@ -49,6 +49,7 @@ eq("default nvim config path", projects.default_dirs[4][1],
     vim.fs.joinpath(vim.fn.stdpath("config"), "lua/neo"))
 eq("default nvim config single", projects.default_dirs[4].single, true)
 eq("default nvim config tag", projects.default_dirs[4].tag, "Config")
+eq("default nvim config name", projects.default_dirs[4].name, "Neo")
 eq("default dir count", #projects.default_dirs, 4)
 
 -- resolve: no prefix means home-relative; ~, /, \\ and drive paths pass

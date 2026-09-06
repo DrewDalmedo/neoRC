@@ -44,7 +44,7 @@ M.default_dirs = {
     "Documents",
     "Projects",
     "Personal",
-    { vim.fs.joinpath(vim.fn.stdpath("config"), "lua/neo"), single = true, tag = "Config" },
+    { vim.fs.joinpath(vim.fn.stdpath("config"), "lua/neo"), single = true, tag = "Config", name = "Neo" },
 }
 
 local config = { dirs = M.default_dirs }

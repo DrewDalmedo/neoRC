@@ -1,8 +1,11 @@
 -- lua/neo/plugins/scope/files.lua
 -- File picker: a breadth-first async filesystem scan streamed into the
 -- generic picker, which handles fuzzy filtering against the prompt.
+-- Entries matched by a .gitignore anywhere along their path are dropped
+-- during the walk (see gitignore.lua).
 local picker = require("neo.plugins.picker")
 local util = require("neo.plugins.picker.util")
+local gitignore = require("neo.plugins.scope.gitignore")
 
 local M = {}
 
@@ -19,9 +22,11 @@ local IGNORE_DIRS = {
 }
 
 -- Walk `opts.cwd` breadth-first on the main loop, yielding between directory
--- batches so the UI stays responsive. Relative paths arrive in chunks via
--- on_chunk(list); on_done() fires once, including when the file cap is hit.
--- opts.cancelled() is polled between ticks to abandon a stale scan.
+-- batches so the UI stays responsive. Each directory's .gitignore joins the
+-- rule chain its entries are checked against: ignored files are skipped and
+-- ignored directories pruned without descending. Relative paths arrive in
+-- chunks via on_chunk(list); on_done() fires once, including when the file
+-- cap is hit. opts.cancelled() is polled between ticks to abandon a stale scan.
 function M.scan_async(opts, on_chunk, on_done)
     local cancelled = opts.cancelled or function() return false end
     local queue = { { path = opts.cwd, rel = "", depth = 0 } }
@@ -39,21 +44,25 @@ function M.scan_async(opts, on_chunk, on_done)
             idx = idx + 1
 
             if dir.depth < MAX_DEPTH then
+                -- The directory's own .gitignore joins the chain its entries see
+                local ign = gitignore.extend(dir.ign, dir.path, dir.depth)
                 -- pcall covers both unreadable dirs and errors raised mid-iteration
                 pcall(function()
                     for name, type in vim.fs.dir(dir.path) do
                         processed = processed + 1
                         local rel = dir.rel == "" and name or (dir.rel .. "/" .. name)
                         if type == "directory" then
-                            if not IGNORE_DIRS[name] then
+                            if not IGNORE_DIRS[name] and not gitignore.ignored(ign, rel, true) then
                                 table.insert(queue, {
                                     path = vim.fs.joinpath(dir.path, name),
-                                    rel = rel, depth = dir.depth + 1,
+                                    rel = rel, depth = dir.depth + 1, ign = ign,
                                 })
                             end
                         elseif type == "file" or type == "link" then
-                            count = count + 1
-                            table.insert(chunk, rel)
+                            if not gitignore.ignored(ign, rel, false) then
+                                count = count + 1
+                                table.insert(chunk, rel)
+                            end
                         end
                     end
                 end)

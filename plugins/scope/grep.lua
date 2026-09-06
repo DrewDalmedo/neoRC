@@ -2,24 +2,30 @@
 -- Live grep: an external search process (rg/grep/findstr) streamed into the
 -- generic picker. The prompt drives the search tool, so results arrive
 -- pre-filtered and the picker just displays them in arrival order.
+-- .gitignore rules apply everywhere: rg enforces them natively, while the
+-- grep/findstr fallbacks are post-filtered through gitignore.lua.
 local picker = require("neo.plugins.picker")
 local util = require("neo.plugins.picker.util")
+local gitignore = require("neo.plugins.scope.gitignore")
 
 local M = {}
 
 local MAX_RESULTS = 1000
 local MIN_QUERY_CHARS = 2
 
--- Pick the best available search tool. Returns the argv and whether the
--- tool's output includes a column field.
+-- Pick the best available search tool. Returns the argv, whether the tool's
+-- output includes a column field, and whether it applies .gitignore itself.
 function M.build_cmd(query)
     if vim.fn.executable("rg") == 1 then
-        -- The explicit "." matters: without a path, rg searches stdin when it isn't a tty
-        return { "rg", "--vimgrep", "--no-heading", "--color=never", "--", query, "." }, true
+        -- The explicit "." matters: without a path, rg searches stdin when it
+        -- isn't a tty. --no-require-git makes rg honor .gitignore files even
+        -- outside git repositories, matching the file picker's behavior.
+        return { "rg", "--vimgrep", "--no-heading", "--color=never",
+            "--no-require-git", "--", query, "." }, true, true
     elseif vim.fn.has("win32") == 1 and vim.fn.executable("findstr") == 1 then
-        return { "findstr", "/s", "/n", "/c:" .. query, "*" }, false
+        return { "findstr", "/s", "/n", "/c:" .. query, "*" }, false, false
     else
-        return { "grep", "-rn", "--exclude-dir=.git", "--color=never", "--", query, "." }, false
+        return { "grep", "-rn", "--exclude-dir=.git", "--color=never", "--", query, "." }, false, false
     end
 end
 
@@ -41,9 +47,11 @@ function M.parse_line(line, has_col)
 end
 
 -- Start a search job in opts.cwd; on_match(file, lnum, col, text) fires per
--- parsed hit. Returns a handle with .stop(); output after stop() is dropped.
+-- parsed hit. When the chosen tool lacks native .gitignore support, hits
+-- with opts.ignored(file) == true are dropped before on_match. Returns a
+-- handle with .stop(); output after stop() is dropped.
 function M.run(query, opts, on_match)
-    local cmd, has_col = M.build_cmd(query)
+    local cmd, has_col, native_ignore = M.build_cmd(query)
     local line_buf = ""
     local handle = { stopped = false }
 
@@ -57,7 +65,9 @@ function M.run(query, opts, on_match)
         line = line:gsub("\r$", "")
         if line == "" then return end
         local file, lnum, col, text = M.parse_line(line, has_col)
-        if file then on_match(file, lnum, col, text) end
+        if not file then return end
+        if not native_ignore and opts.ignored and opts.ignored(file) then return end
+        on_match(file, lnum, col, text)
     end
 
     local job_id = vim.fn.jobstart(cmd, {
@@ -100,6 +110,14 @@ function M.open()
     local job = nil
     local p
 
+    -- Post-filter for tools without native gitignore support (grep/findstr):
+    -- drop .git internals, which findstr would otherwise wade through, then
+    -- apply .gitignore rules. .gitignore contents are cached per picker session.
+    local check = gitignore.checker(cwd)
+    local function ignored(file)
+        return file:match("^%.git[/\\]") ~= nil or check(file)
+    end
+
     local function stop_job()
         if job then
             job.stop()
@@ -140,7 +158,7 @@ function M.open()
             seen = {}
             p:set_items({})
             if #query < MIN_QUERY_CHARS then return end
-            job = M.run(query, { cwd = cwd }, add_match)
+            job = M.run(query, { cwd = cwd, ignored = ignored }, add_match)
         end,
     })
 

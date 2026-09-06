@@ -1,8 +1,9 @@
 -- lua/neo/plugins/scope/init.lua
 -- Scope: file finding and live grep, built on the generic picker framework
 -- (neo.plugins.picker). Each mode lives in its own module:
---   files.lua - async filesystem scan feeding the fuzzy file picker
---   grep.lua  - external search tool streaming into the picker
+--   files.lua     - async filesystem scan feeding the fuzzy file picker
+--   grep.lua      - external search tool streaming into the picker
+--   gitignore.lua - .gitignore parsing/matching shared by both modes
 local M = {}
 
 function M.find_files()

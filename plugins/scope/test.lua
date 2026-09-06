@@ -1,9 +1,26 @@
 -- lua/neo/plugins/scope/test.lua
 -- Run from anywhere: nvim -l path/to/plugins/scope/test.lua
+-- Standalone: neo.* requires resolve relative to this file, so no rtp setup
+-- is needed and an installed copy of the config never shadows this checkout.
 local here = debug.getinfo(1, "S").source:sub(2):match("(.*)[/\\]")
-local scope = dofile(here .. "/init.lua")
-local parse = scope._parse_grep_line
-local fuzzy = scope._fuzzy_score
+local root = here .. "/../.."
+
+table.insert(package.loaders or package.searchers, 2, function(name)
+    local rel = name:match("^neo%.(.+)$")
+    if not rel then return end
+    local base = root .. "/" .. rel:gsub("%.", "/")
+    for _, cand in ipairs({ base .. ".lua", base .. "/init.lua" }) do
+        local f = io.open(cand, "r")
+        if f then
+            f:close()
+            return function() return dofile(cand) end
+        end
+    end
+end)
+
+local grep = require("neo.plugins.scope.grep")
+local fuzzy = require("neo.plugins.picker.fuzzy")
+local parse = grep.parse_line
 
 local failures = 0
 local function eq(desc, got, want)
@@ -55,13 +72,32 @@ eq("empty", parse("", false), nil)
 eq("findstr warning line", parse("FINDSTR: Cannot open foo", false), nil)
 
 -- fuzzy scorer contract
-eq("fuzzy empty pattern", fuzzy("anything", ""), 1)
-eq("fuzzy no match", fuzzy("main.c", "xyz"), 0)
-assert(fuzzy("src/app/main.py", "mainpy") > 0, "subsequence must match")
-assert(fuzzy("config.lua", "conf") > fuzzy("src/config.lua", "conf"),
+eq("fuzzy empty pattern", fuzzy.score("anything", ""), 1)
+eq("fuzzy no match", fuzzy.score("main.c", "xyz"), 0)
+assert(fuzzy.score("src/app/main.py", "mainpy") > 0, "subsequence must match")
+assert(fuzzy.score("config.lua", "conf") > fuzzy.score("src/config.lua", "conf"),
     "shorter path must outrank longer on the same match")
-assert(fuzzy(string.rep("abcdefghij/", 30) .. "z.txt", "z") > 0,
+assert(fuzzy.score(string.rep("abcdefghij/", 30) .. "z.txt", "z") > 0,
     "match in a long path must stay positive")
+
+-- fuzzy.filter: the ranking pipeline the picker uses
+local items = {
+    { display = "src/config.lua" },
+    { display = "config.lua" },
+    { display = "README.md" },
+}
+local out = fuzzy.filter(items, "conf")
+eq("filter drops non-matches", #out, 2)
+eq("filter ranks shorter first", out[1].display, "config.lua")
+out = fuzzy.filter(items, "")
+eq("filter empty query keeps count", #out, 3)
+eq("filter empty query keeps order", out[1].display, "src/config.lua")
+out = fuzzy.filter(items, "conf", { limit = 1 })
+eq("filter respects limit", #out, 1)
+out = fuzzy.filter({ { name = "abc" }, { name = "xyz" } }, "b",
+    { key = function(i) return i.name end })
+eq("filter custom key count", #out, 1)
+eq("filter custom key match", out[1].name, "abc")
 
 if failures > 0 then
     print("FAILURES: " .. failures)

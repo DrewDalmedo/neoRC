@@ -37,11 +37,23 @@ local function find(items, name)
     end
 end
 
--- the default tracked set is the documented one
-eq("default dir 1", projects.default_dirs[1], "~/Documents")
-eq("default dir 2", projects.default_dirs[2], "~/Projects")
-eq("default dir 3", projects.default_dirs[3], "~/Personal")
+-- the default tracked set is the documented one, named relative to home
+eq("default dir 1", projects.default_dirs[1], "Documents")
+eq("default dir 2", projects.default_dirs[2], "Projects")
+eq("default dir 3", projects.default_dirs[3], "Personal")
 eq("default dir count", #projects.default_dirs, 3)
+
+-- resolve: no prefix means home-relative; ~, /, \\ and drive paths pass
+-- through (backslash and drive forms only flip separators on Windows, so
+-- assert prefixes rather than exact strings for those)
+local home = vim.fs.normalize(vim.uv.os_homedir())
+eq("resolve bare name", projects.resolve("Documents"), home .. "/Documents")
+eq("resolve nested relative", projects.resolve("Uni/CS"), home .. "/Uni/CS")
+eq("resolve tilde", projects.resolve("~/Projects"), home .. "/Projects")
+eq("resolve unix absolute", projects.resolve("/opt/src"), "/opt/src")
+eq("resolve drive", projects.resolve("C:/repos"), "C:/repos")
+eq("resolve drive backslash", projects.resolve([[C:\repos]]):match("^C:") ~= nil, true)
+eq("resolve unc", projects.resolve([[\\server\share]]):match("^[/\\]") ~= nil, true)
 
 -- fixture tree: two tracked dirs (one via trailing slash), one missing
 local tmp = vim.fn.tempname()
@@ -99,6 +111,28 @@ items = projects.items()
 eq("override count", #items, 1)
 eq("override display", items[1].display, "Embedded  blinky")
 
+-- the projects section of overrides.lua supplies the set when setup() gets
+-- no dirs, and an explicit setup{dirs} still wins over it
+package.loaded["neo.overrides"] = { projects = { dirs = { tmp .. "/Embedded" } } }
+projects.setup({})
+items = projects.items()
+eq("overrides.lua count", #items, 1)
+eq("overrides.lua item", items[1].name, "blinky")
+projects.setup({ dirs = { tmp .. "/Alpha" } })
+eq("setup dirs beat overrides.lua", projects.items()[1].label, "Alpha")
+
+-- an empty or missing dirs list in overrides.lua means "use the defaults"
+-- (default_dirs is patched to the fixture so the fallback is observable)
+local saved_defaults = projects.default_dirs
+projects.default_dirs = { tmp .. "/Embedded" }
+package.loaded["neo.overrides"] = { projects = { dirs = {} } }
+projects.setup({})
+eq("empty overrides dirs fall back", projects.items()[1].name, "blinky")
+package.loaded["neo.overrides"] = { graphical = { font_size = 18 } }
+projects.setup({})
+eq("no projects section falls back", projects.items()[1].name, "blinky")
+projects.default_dirs = saved_defaults
+
 -- open() refuses politely instead of showing an empty picker
 local notified
 local saved_notify = vim.notify
@@ -111,6 +145,22 @@ projects.setup({ dirs = { tmp .. "/linktarget" } })
 eq("open with no projects", projects.open(), nil)
 eq("no projects warns", notified ~= nil and notified:find("no projects") ~= nil, true)
 vim.notify = saved_notify
+
+-- a broken overrides.lua is reported, not silently swallowed
+package.loaded["neo.overrides"] = nil
+local searchers = package.loaders or package.searchers
+table.insert(searchers, 1, function(name)
+    if name == "neo.overrides" then
+        return function() error("boom") end
+    end
+end)
+notified = nil
+vim.notify = function(msg) notified = msg end
+projects.setup({})
+vim.notify = saved_notify
+table.remove(searchers, 1)
+package.loaded["neo.overrides"] = nil
+eq("broken overrides.lua reported", notified ~= nil and notified:find("boom") ~= nil, true)
 
 vim.fn.delete(tmp, "rf")
 

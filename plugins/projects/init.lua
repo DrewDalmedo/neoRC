@@ -9,34 +9,66 @@
 -- The fuzzy prompt matches the whole line, so a query can hit the project
 -- name, the label, or both ("emb bl"). <CR> cds into the selected project.
 --
---   require("neo.plugins.projects").setup()   -- track default_dirs
---   require("neo.plugins.projects").setup({
---       dirs = { "~/Work", "D:/repos" },      -- replace the tracked set
---   })
+-- The tracked set is decided at setup(), first hit wins:
+--   1. setup({ dirs = ... })
+--   2. the projects section of overrides.lua (a gitignored, per-machine
+--      file, same shape graphical/ uses):
+--          return { projects = { dirs = { "Uni", "~/Work" } } }
+--   3. M.default_dirs
 --
--- Tracked directories that don't exist are skipped silently, so one config
--- can list the project roots of every machine it is deployed to.
+-- Each dir is a string: with no prefix it is relative to the home directory
+-- ("Documents" -> ~/Documents); "~/...", "/...", "\\server\..." and
+-- drive-letter ("C:/...") paths are used as written. Dirs that don't exist
+-- are skipped silently, so one list can serve every machine the config is
+-- deployed to.
 local picker = require("neo.plugins.picker")
 
 local M = {}
 
--- Tracked when setup() gets no dirs; each is used only where it exists.
-M.default_dirs = { "~/Documents", "~/Projects", "~/Personal" }
+-- Tracked when neither setup{dirs} nor overrides.lua gives a set.
+M.default_dirs = { "Documents", "Projects", "Personal" }
 
 local config = { dirs = M.default_dirs }
 
--- Expand the configured dirs and keep those that exist as directories,
+-- Resolve one configured dir string to an absolute path. Anything without a
+-- "~", "/", "\" or drive-letter prefix is taken relative to the home
+-- directory; vim.fs.normalize expands the "~" portably.
+function M.resolve(dir)
+    if dir:match("^[~/\\]") or dir:match("^%a:") then
+        return vim.fs.normalize(dir)
+    end
+    return vim.fs.normalize("~/" .. dir)
+end
+
+-- Resolve the configured dirs and keep those that exist as directories,
 -- labelled by their basename.
 local function tracked_dirs()
     local out = {}
     for _, dir in ipairs(config.dirs) do
-        local path = vim.fs.normalize(dir)
+        local path = M.resolve(dir)
         local stat = vim.uv.fs_stat(path)
         if stat and stat.type == "directory" then
             out[#out + 1] = { path = path, label = vim.fs.basename(path) }
         end
     end
     return out
+end
+
+-- projects.dirs from overrides.lua (module neo.overrides), or nil when the
+-- file, section, or list is absent or empty. A missing file is fine; a
+-- broken one is reported rather than silently ignored.
+local function override_dirs()
+    local ok, overrides = pcall(require, "neo.overrides")
+    if not ok then
+        if not tostring(overrides):find("not found", 1, true) then
+            vim.notify("projects: failed to load overrides.lua:\n" .. tostring(overrides),
+                vim.log.levels.ERROR)
+        end
+        return
+    end
+    if type(overrides) ~= "table" or type(overrides.projects) ~= "table" then return end
+    local dirs = overrides.projects.dirs
+    if type(dirs) == "table" and #dirs > 0 then return dirs end
 end
 
 -- Non-hidden subdirectory names of one tracked dir, sorted; symlinks count
@@ -105,11 +137,11 @@ function M.open()
     })
 end
 
--- opts.dirs replaces the tracked set; to extend the defaults instead:
---   dirs = vim.list_extend({ "~/Work" }, require("neo.plugins.projects").default_dirs)
+-- opts.dirs replaces the tracked set for this setup call; without it the
+-- set comes from overrides.lua, then M.default_dirs.
 function M.setup(opts)
     opts = opts or {}
-    if opts.dirs then config.dirs = opts.dirs end
+    config.dirs = opts.dirs or override_dirs() or M.default_dirs
     vim.api.nvim_create_user_command("Projects", M.open, { desc = "Projects: select a project" })
 end
 

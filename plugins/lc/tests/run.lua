@@ -552,6 +552,389 @@ test("sanitizer reports become diagnostics", function()
     H.eq(items[1].lnum, 5)
 end)
 
+-- ------------------------------------------------------------------
+-- lc submit's sanitizer check
+
+-- How many lines contain s.
+local function count(lines, s)
+    local n = 0
+    for _, l in ipairs(lines) do
+        if l:find(s, 1, true) then
+            n = n + 1
+        end
+    end
+    return n
+end
+
+test("submit checks with the sanitizers: a read past the end", function()
+    local sol = H.start(1, "c", "two-sum/past_end.c")
+    -- A plain build doesn't notice, and lc test has no check.
+    H.eq(H.run("Lc test").verdict, "accepted")
+    local data = H.run("Lc submit")
+    local run = require("neo.plugins.lc.run").last
+    -- The tests use whichever lc is installed, which may be older.
+    if data.sanitizer_check == nil then
+        H.skip("this lc predates lc submit's sanitizer check")
+    end
+    if data.sanitizer_check == "skipped" then
+        H.skip("lc can't check with the sanitizers here: " .. tostring(run.done.sanitizer_check_note))
+    end
+    H.eq(data.verdict, "runtime_error")
+    H.eq(data.sanitizer_check, "failed")
+    H.eq(data.passed, 0)
+    local lines = result()
+    -- The run's build is the first one, without the sanitizers.
+    H.eq(lines[1], "lc submit · 1. Two Sum · solution.c (C, c11)")
+    H.ok(lines[2]:match("^Runtime Error: 0/%d+ cases passed · status: attempted$"), lines[2])
+    -- The case the check failed takes its first run's place: no case twice.
+    H.eq(#run.cases, data.total)
+    H.eq(count(lines, "Runtime Error on case"), 1)
+    local head = lines[H.cursor_on("Runtime Error on case 1 of ")]
+    H.ok(head:match("^Runtime Error on case 1 of %d+ with the sanitizers"), head)
+    H.has(lines, "AddressSanitizer: heap-buffer-overflow")
+    H.has(H.note("1. Two Sum: Runtime Error on case 1 of ").msg, " with the sanitizers, 0/")
+
+    -- The report points at the read, in the diagnostics and quickfix.
+    local found = vim.tbl_filter(function(d)
+        return d.message:find("heap-buffer-overflow", 1, true) ~= nil
+    end, H.diagnostics(sol))
+    H.eq(#found, 1, "a diagnostic for the read: " .. vim.inspect(H.diagnostics(sol)))
+    H.eq(found[1].lnum, 5)
+    H.eq(found[1].severity, vim.diagnostic.severity.ERROR)
+    H.has(found[1].message, "(Case 1)")
+    local items = vim.tbl_filter(function(i)
+        return i.text:find("with the sanitizers", 1, true) ~= nil or i.text:find("heap-buffer-overflow", 1, true) ~= nil
+    end, qf().items)
+    H.eq(#items, 2, vim.inspect(qf().items))
+
+    -- a adds the case, saying where it failed.
+    H.keys("a")
+    H.has(H.read(vim.fs.dirname(sol) .. "/cases.txt"), "# From lc submit: case 1, Runtime Error with the sanitizers\n")
+end)
+
+-- A stand-in for lc that answers lc submit with these events: each part
+-- is a list of them, as Lua tables, written as JSON Lines. Before each
+-- part after the first, it waits for the test to call go(n) (n = the part
+-- before); then it exits with code. Other commands go to the real lc.
+local function fake_submit(parts, code)
+    local dir = ("%s/fake-%d"):format(H.tmp, H.n)
+    local script = {}
+    for i, docs in ipairs(parts) do
+        local lines = {}
+        for _, d in ipairs(docs) do
+            d.schema = 1
+            lines[#lines + 1] = vim.json.encode(d)
+        end
+        local file = ("%s/part-%d.jsonl"):format(dir, i)
+        H.write(file, table.concat(lines, "\n") .. "\n")
+        if i > 1 then
+            script[#script + 1] = ("while [ ! -e '%s/go-%d' ]; do sleep 0.05; done"):format(dir, i - 1)
+        end
+        script[#script + 1] = ("cat '%s'"):format(file)
+    end
+    script[#script + 1] = "exit " .. (code or 0)
+    local body = ("if [ \"$1\" != submit ]; then exec '%s' \"$@\"; fi\n%s"):format(H.lc, table.concat(script, "\n"))
+    require("neo.plugins.lc").setup({ cmd = H.fake_lc(body) })
+    return function(n)
+        H.write(("%s/go-%d"):format(dir, n), "")
+    end
+end
+
+-- lc's events for 1. Two Sum's solution sol: its build (check: the
+-- sanitizer check's), a case of three (and its start), and done.
+local function build(sol, check, extra)
+    local start = {
+        event = "build_start",
+        reference = false,
+        role = "solution",
+        lang = "c",
+        std = "c11",
+        source = sol,
+        compiler = "cc",
+        sanitize = check,
+        sanitizer_check = check,
+    }
+    local done = vim.tbl_extend("force", start, {
+        event = "build_done",
+        ok = true,
+        cached = false,
+        time_ms = 1,
+        output = "",
+        diagnostics = {},
+        prototype = "int* twoSum(int* nums, int numsSize, int target, int* returnSize)",
+    }, extra or {})
+    return start, done
+end
+
+local function case_start(i, check)
+    return {
+        event = "case_start",
+        index = i,
+        total = 3,
+        file = H.problems .. "/0001-two-sum/tests.txt",
+        line = 20 + 4 * i,
+        sanitizer_check = check,
+    }
+end
+
+local function case(i, verdict, check, extra)
+    return vim.tbl_extend("force", case_start(i, check), {
+        event = "case_done",
+        example = false,
+        custom = false,
+        verdict = verdict,
+        inputs = { { name = "nums", value = "[2,7,11,15]" }, { name = "target", value = "9" } },
+        expected = "[0,1]",
+        output = "[0,1]",
+        stdout = "",
+        stdout_truncated = false,
+        stderr = "",
+        stderr_truncated = false,
+        time_ms = 1,
+        wall_ms = 1,
+        memory_kb = 1024,
+        exit_code = 0,
+    }, extra or {})
+end
+
+local function done(verdict, passed, check, note, extra)
+    return vim.tbl_extend("force", {
+        event = "done",
+        verdict = verdict,
+        passed = passed,
+        total = 3,
+        cancelled = false,
+        max_time_ms = 1,
+        max_memory_kb = 1024,
+        sanitizer_check = check,
+        sanitizer_check_note = note,
+        status = verdict == "accepted" and "solved" or "attempted",
+        first_solve = false,
+        warnings = {},
+    }, extra or {})
+end
+
+-- The three cases passing, without the check (check false) or in it.
+local function passing(check)
+    local docs = {}
+    for i = 0, 2 do
+        vim.list_extend(docs, { case_start(i, check), case(i, "accepted", check) })
+    end
+    return docs
+end
+
+local function asan_report(sol)
+    return table.concat({
+        "=================================================================",
+        "==4242==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x602000000018 at pc 0x100003f2c",
+        "READ of size 4 at 0x602000000018 thread T0",
+        "    #0 0x100003f2c in twoSum " .. sol .. ":6",
+        "    #1 0x100004a10 in main lc_harness:120",
+        "",
+        "SUMMARY: AddressSanitizer: heap-buffer-overflow " .. sol .. ":6 in twoSum",
+        "",
+    }, "\n")
+end
+
+local ACCEPTED = "^Accepted: 3/3 cases passed, slowest 1 ms, peak memory 1%.0 MB · status: solved$"
+
+test("the sanitizer check's progress", function()
+    local sol = H.start(1, "c", "two-sum/ok.c")
+    local b1, d1 = build(sol, false)
+    local b2, d2 = build(sol, true)
+    local first = vim.list_extend({ b1, d1 }, passing(false))
+    local check = passing(true)
+    local go = fake_submit({
+        vim.list_extend(first, { b2 }),
+        { d2, check[1] },
+        vim.list_extend(vim.list_slice(check, 2), { done("accepted", 3, "passed") }),
+    })
+    local data
+    vim.api.nvim_create_autocmd("User", {
+        pattern = "LcRunDone",
+        once = true,
+        callback = function(ev)
+            data = ev.data
+        end,
+    })
+    vim.cmd("Lc submit")
+    H.wait(function()
+        return result()[2] == "Checking with the sanitizers…"
+    end, "the check's build")
+    -- The run's build is still the first.
+    H.eq(result()[1], "lc submit · 1. Two Sum · solution.c (C, c11)")
+    H.eq(require("neo.plugins.lc").status(), "lc submit: sanitizers")
+    go(1)
+    H.wait(function()
+        return result()[2] == "Checking with the sanitizers: case 1 of 3…"
+    end, "the check's first case")
+    H.eq(require("neo.plugins.lc").status(), "lc submit: sanitizers 1/3")
+    go(2)
+    H.wait(function()
+        return data ~= nil
+    end, "the run to end")
+    H.eq(data.verdict, "accepted")
+    H.eq(data.sanitizer_check, "passed")
+    local lines = result()
+    H.eq(lines[1], "lc submit · 1. Two Sum · solution.c (C, c11)")
+    H.ok(lines[2]:match(ACCEPTED), lines[2])
+    H.eq(#require("neo.plugins.lc.run").last.cases, 3)
+    H.hasnt(lines, "sanitizers")
+    H.eq(require("neo.plugins.lc").status(), "")
+end)
+
+test("a case that fails in the sanitizer check", function()
+    local sol = H.start(1, "c", "two-sum/ok.c")
+    -- Both builds warn; the warning is shown and listed once.
+    local warning = { file = sol, line = 2, column = 10, severity = "warning", message = "unused variable 'x'", in_solution = true }
+    local warned = { output = sol .. ":2:10: warning: unused variable 'x'\n", diagnostics = { warning } }
+    local b1, d1 = build(sol, false, warned)
+    local b2, d2 = build(sol, true, warned)
+    local docs = vim.list_extend({ b1, d1 }, passing(false))
+    vim.list_extend(docs, {
+        b2,
+        d2,
+        case_start(0, true),
+        case(0, "accepted", true),
+        -- Running out of time doesn't count in the check.
+        case_start(1, true),
+        case(1, "time_limit_exceeded", true, { message = "used 1500 ms of CPU time" }),
+        case_start(2, true),
+        case(2, "runtime_error", true, {
+            message = "killed by SIGABRT",
+            output = vim.NIL,
+            stderr = asan_report(sol),
+            exit_code = vim.NIL,
+            signal = "SIGABRT",
+        }),
+        done("runtime_error", 2, "failed"),
+    })
+    fake_submit({ docs })
+    local data = H.run("Lc submit")
+    H.eq(data.verdict, "runtime_error")
+    H.eq(data.sanitizer_check, "failed")
+    local lines = result()
+    H.eq(lines[1], "lc submit · 1. Two Sum · solution.c (C, c11)")
+    H.eq(lines[2], "Runtime Error: 2/3 cases passed · status: attempted")
+    H.eq(count(lines, "Compiler warnings:"), 1)
+    H.eq(count(lines, "unused variable 'x'"), 1)
+    H.hasnt(lines, "Compiler output with the sanitizers")
+    -- Only the case that failed is added, and it says where.
+    H.eq(#require("neo.plugins.lc.run").last.cases, 3)
+    H.eq(count(lines, "Runtime Error on case"), 1)
+    H.has(lines, "Runtime Error on case 3 of 3 with the sanitizers (killed by SIGABRT)\n  Input:    nums = [2,7,11,15], target = 9")
+    H.has(lines, "        #0 0x100003f2c in twoSum solution.c:6")
+    H.hasnt(lines, "Time Limit Exceeded")
+    H.note("1. Two Sum: Runtime Error on case 3 of 3 with the sanitizers, 2/3 cases passed")
+
+    local diags = H.diagnostics(sol)
+    table.sort(diags, function(a, b)
+        return a.lnum < b.lnum
+    end)
+    H.eq(#diags, 2, vim.inspect(diags))
+    H.eq({ diags[1].lnum, diags[1].severity, diags[1].message }, { 1, vim.diagnostic.severity.WARN, "unused variable 'x'" })
+    H.eq(
+        { diags[2].lnum, diags[2].severity, diags[2].message },
+        { 5, vim.diagnostic.severity.ERROR, "AddressSanitizer: heap-buffer-overflow (Case 3)" }
+    )
+    local texts = vim.tbl_map(function(i)
+        return i.text
+    end, qf().items)
+    H.eq(texts, {
+        "unused variable 'x'",
+        "AddressSanitizer: heap-buffer-overflow (Case 3)",
+        "Runtime Error on case 3 of 3 with the sanitizers (killed by SIGABRT)",
+    })
+
+    -- <CR> on the report's line goes to the read.
+    H.cursor_on("in twoSum solution.c:6")
+    H.keys("<CR>")
+    H.eq(vim.fn.resolve(vim.api.nvim_buf_get_name(0)), vim.fn.resolve(sol))
+    H.eq(vim.api.nvim_win_get_cursor(0)[1], 6)
+end)
+
+test("a sanitizer check that was skipped", function()
+    local sol = H.start(1, "c", "two-sum/ok.c")
+    local b1, d1 = build(sol, false)
+    local function first()
+        return vim.list_extend({ b1, d1 }, passing(false))
+    end
+    fake_submit({ vim.list_extend(first(), { done("accepted", 3, "skipped", "cc has none") }) })
+    local data = H.run("Lc submit")
+    H.eq(data.verdict, "accepted")
+    H.eq(data.sanitizer_check, "skipped")
+    local lines = result()
+    H.ok(lines[2]:match(ACCEPTED), lines[2])
+    H.eq(lines[3], "Not checked with the sanitizers: cc has none")
+    H.eq(count(lines, "sanitizers"), 1)
+    H.note("1. Two Sum: Accepted, 3/3 cases")
+
+    -- It doesn't build with them: the compiler's output says why, but its
+    -- errors aren't diagnostics, since the solution was accepted.
+    local err = { file = sol, line = 3, column = 1, severity = "error", message = "no sanitizers", in_solution = true }
+    local b2, d2 = build(sol, true, { ok = false, output = sol .. ":3:1: error: no sanitizers\n", diagnostics = { err } })
+    fake_submit({ vim.list_extend(first(), { b2, d2, done("accepted", 3, "skipped", "it doesn't build with them") }) })
+    data = H.run("Lc submit")
+    H.eq(data.verdict, "accepted")
+    lines = result()
+    H.eq(lines[1], "lc submit · 1. Two Sum · solution.c (C, c11)")
+    H.ok(lines[2]:match(ACCEPTED), lines[2])
+    H.eq(lines[3], "Not checked with the sanitizers: it doesn't build with them")
+    H.has(lines, "Compiler output with the sanitizers:\n  solution.c:3:1: error: no sanitizers")
+    H.eq(H.diagnostics(sol), {})
+    H.eq(qf().items, {})
+end)
+
+test("cancelled during the sanitizer check", function()
+    local sol = H.start(1, "c", "two-sum/ok.c")
+    local b1, d1 = build(sol, false)
+    local b2, d2 = build(sol, true)
+    local docs = vim.list_extend({ b1, d1 }, passing(false))
+    vim.list_extend(docs, { b2, d2, case_start(0, true) })
+    fake_submit({
+        vim.list_extend(vim.deepcopy(docs), { done("none", 3, "cancelled", nil, { cancelled = true, status = vim.NIL }) }),
+    }, 130)
+    local data = H.run("Lc submit")
+    H.eq(data.verdict, "none")
+    H.eq(data.cancelled, true)
+    H.eq(data.sanitizer_check, "cancelled")
+    H.eq(result()[2], "Cancelled while checking with the sanitizers")
+    H.note("1. Two Sum: cancelled")
+    -- Stopped before lc could say so.
+    fake_submit({ docs }, 130)
+    data = H.run("Lc submit")
+    H.eq(data.cancelled, true)
+    H.eq(result()[2], "Cancelled while checking with the sanitizers")
+end)
+
+test("an lc without the sanitizer check", function()
+    local sol = H.start(1, "c", "two-sum/ok.c")
+    local b1, d1 = build(sol, false)
+    local docs = {
+        b1,
+        d1,
+        case_start(0, false),
+        case(0, "accepted", false),
+        case_start(1, false),
+        case(1, "wrong_answer", false, { output = "[1,0]" }),
+        done("wrong_answer", 1, nil),
+    }
+    -- Older lc sends none of the check's members.
+    for _, d in ipairs(docs) do
+        d.sanitizer_check, d.sanitizer_check_note = nil, nil
+    end
+    fake_submit({ docs })
+    local data = H.run("Lc submit")
+    H.eq(data.verdict, "wrong_answer")
+    H.eq(data.sanitizer_check, nil)
+    local lines = result()
+    H.eq(lines[1], "lc submit · 1. Two Sum · solution.c (C, c11)")
+    H.eq(lines[2], "Wrong Answer: 1/3 cases passed · status: attempted")
+    H.has(lines, "Wrong Answer on case 2 of 3\n")
+    H.hasnt(lines, "sanitizers")
+    H.eq(#require("neo.plugins.lc.run").last.cases, 2)
+end)
+
 test(":Lc std for the session", function()
     H.start(1, "cpp", "two-sum/ok.cpp")
     vim.cmd("Lc std c++17")

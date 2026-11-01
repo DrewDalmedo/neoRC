@@ -22,8 +22,14 @@
 --                          in the background
 --   submit [solution] [--std STD] [--sanitize] [--lang LANG]
 --                          run every case, stopping at the first failure,
---                          and record the submission
---   cancel                 stop the run, as ^C; a second one kills lc
+--                          and record the submission. When all pass, lc
+--                          runs them again built with ASan and UBSan, as
+--                          LeetCode builds it: a case that fails there,
+--                          other than by running out of time, gives the
+--                          verdict ("Runtime Error on case 3 of 22 with
+--                          the sanitizers"); where lc can't check, the
+--                          result says why
+--   cancel                stop the run, as ^C; a second one kills lc
 --   result                 open the last run's result window again
 --   stats                  solved and attempted, by difficulty and tag
 --   std [c|cpp] {std}      the standard for this session: c++17, c11, max,
@@ -37,8 +43,8 @@
 -- per case, and each failure's input, output, expected output, stdout and
 -- stderr. Its keys: a adds the case under the cursor to cases.txt, <CR>
 -- goes to what the line is about, r runs again, <C-c> cancels, q closes.
--- Compile errors and sanitizer reports become vim.diagnostic entries on
--- the solution (source "lc"). They and the failed cases also fill the
+-- Compile errors and sanitizer reports (--sanitize, or submit's check)
+-- become vim.diagnostic entries on the solution (source "lc"). They and the failed cases also fill the
 -- quickfix list, replacing the last run's list but never one of yours.
 --
 -- Options, each layer over the one before: the defaults (config.lua), the
@@ -49,11 +55,14 @@
 -- (vim.ui.select). The compilers, standards, workspace and the language
 -- of new problems are lcclone's own settings, in ~/.config/lcclone/config.
 --
--- For a statusline, M.status() is "" or something like "lc test: 3/16".
--- User autocmds LcRunStart and LcRunDone fire around each run. Their data
--- holds kind, target and problem, and for LcRunDone also verdict (lc's,
--- such as "accepted"; "none" when cancelled first; "error" when lc
--- failed), cancelled, error, passed, total and solution.
+-- For a statusline, M.status() is "" or something like "lc test: 3/16"
+-- ("lc submit: sanitizers 3/16" in submit's check). User autocmds
+-- LcRunStart and LcRunDone fire around each run. Their data holds kind,
+-- target and problem, and for LcRunDone also verdict (lc's, such as
+-- "accepted"; "none" when cancelled first; "error" when lc failed),
+-- cancelled, error, passed, total, solution, and sanitizer_check (how
+-- submit's check went: "passed", "failed", "skipped" or "cancelled"; nil
+-- when there was none).
 --
 -- :checkhealth neo.plugins.lc checks lc, its problems and the picker. The
 -- tests: nvim -l path/to/plugins/lc/test.lua (see there).

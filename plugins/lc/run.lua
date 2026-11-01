@@ -84,14 +84,18 @@ function M.case_label(run, c)
     return ("Case %d"):format(c.index + 1)
 end
 
---- "on example 2", "on case 7 of 16" or "on your case at cases.txt:5".
+--- "on example 2", "on case 7 of 16" or "on your case at cases.txt:5",
+--- and " with the sanitizers" for a case that failed in lc submit's check.
 local function case_where(run, c)
+    local s
     if c.custom then
-        return "on your case at " .. M.case_label(run, c)
+        s = "on your case at " .. M.case_label(run, c)
     elseif run.kind == "test" and c.example then
-        return ("on example %d"):format(c.index + 1)
+        s = ("on example %d"):format(c.index + 1)
+    else
+        s = ("on case %d of %d"):format(c.index + 1, c.total or run.total or 0)
     end
-    return ("on case %d of %d"):format(c.index + 1, c.total or run.total or 0)
+    return c.sanitizer_check and s .. " with the sanitizers" or s
 end
 
 local function failed(c)
@@ -346,13 +350,20 @@ local function status_line(run)
     if run.error then
         -- The first line; render_lines shows the rest below.
         return "Error: " .. run.error:match("^[^\n]*"), "LcFailed"
+    elseif run.killed and run.check_build then
+        return "Cancelled while checking with the sanitizers", "LcLimit"
     elseif run.killed then
         return ("Cancelled after %d cases"):format(#run.cases), "LcLimit"
     elseif not run.finished and run.cancelling then
         return "Cancelling…", "LcRunning"
     elseif not run.finished then
-        if run.running then
-            return ("Running case %d of %d…"):format(run.running.index + 1, run.running.total), "LcRunning"
+        local r = run.running
+        if r and r.sanitizer_check then
+            return ("Checking with the sanitizers: case %d of %d…"):format(r.index + 1, r.total), "LcRunning"
+        elseif r then
+            return ("Running case %d of %d…"):format(r.index + 1, r.total), "LcRunning"
+        elseif run.check_build then
+            return "Checking with the sanitizers…", "LcRunning"
         elseif run.ref_build and not run.ref_done then
             return "Working out your cases' expected results with the reference solution…", "LcRunning"
         elseif run.build_done and run.build_done.ok then
@@ -363,6 +374,8 @@ local function status_line(run)
         return "lc stopped without a verdict", "LcFailed"
     elseif done.verdict == "compile_error" then
         return "Compile Error", "LcFailed"
+    elseif done.cancelled and done.sanitizer_check == "cancelled" then
+        return "Cancelled while checking with the sanitizers", "LcLimit"
     elseif done.cancelled then
         return ("Cancelled after %d of %d cases"):format(#run.cases, done.total or 0), "LcLimit"
     end
@@ -453,6 +466,11 @@ function M.render_lines(run)
     if place then
         locs[#lines] = place
     end
+    -- lc submit couldn't check an accepted solution with the sanitizers.
+    local done = run.done
+    if done and done.sanitizer_check == "skipped" then
+        add("Not checked with the sanitizers: " .. (done.sanitizer_check_note or "lc didn't say why"), "LcLimit")
+    end
     -- The rest of a long error, unless it is the reference solution's
     -- compiler output, which comes below anyway.
     local more = run.error and run.error:match("\n(.*)$")
@@ -465,17 +483,20 @@ function M.render_lines(run)
     end
 
     -- The compiler's output.
-    local bd = run.build_done
-    if bd and bd.output and bd.output ~= "" then
+    local function compiler_output(label, text)
         add("")
-        add(bd.ok and "Compiler warnings:" or "Compiler output:", "LcLabel")
-        for _, l in ipairs(text_lines(bd.output)) do
+        add(label, "LcLabel")
+        for _, l in ipairs(text_lines(text)) do
             local lnum, col = location(l, src)
             add("  " .. shorten(l))
             if lnum then
                 locs[#lines] = { file = src, lnum = lnum, col = col }
             end
         end
+    end
+    local bd = run.build_done
+    if bd and bd.output and bd.output ~= "" then
+        compiler_output(bd.ok and "Compiler warnings:" or "Compiler output:", bd.output)
         if not bd.ok then
             local harness, mine = false, false
             for _, d in ipairs(bd.diagnostics or {}) do
@@ -497,6 +518,12 @@ function M.render_lines(run)
                 add(":Lc std c++17 (or max) for this session, or :Lc " .. run.kind .. " --std c++17.", "LcDim")
             end
         end
+    end
+    -- The sanitizer check's build says again what the first one said,
+    -- unless it failed (and the check was skipped).
+    local cd = run.check_done
+    if cd and not cd.ok and cd.output and cd.output ~= "" then
+        compiler_output("Compiler output with the sanitizers:", cd.output)
     end
     local rd = run.ref_done
     if rd and not rd.ok then
@@ -746,6 +773,10 @@ local function on_doc(run, doc)
     elseif doc.event == "build_start" then
         if doc.reference then
             run.ref_build = doc
+        elseif doc.sanitizer_check then
+            -- lc submit checks an accepted solution again, built with the
+            -- sanitizers: the run's build is still the first one.
+            run.check_build = doc
         else
             run.build = doc
             run.src = doc.source
@@ -761,6 +792,10 @@ local function on_doc(run, doc)
     elseif doc.event == "build_done" then
         if doc.reference then
             run.ref_done = doc
+        elseif doc.sanitizer_check then
+            -- Its diagnostics aren't added: they are the first build's again,
+            -- or, when it fails, the check is skipped and the verdict stands.
+            run.check_done = doc
         else
             run.build_done = doc
             for _, d in ipairs(doc.diagnostics or {}) do
@@ -782,7 +817,21 @@ local function on_doc(run, doc)
         run.running = nil
         run.total = doc.total
         doc.label = M.case_label(run, doc)
-        run.cases[#run.cases + 1] = doc
+        if not doc.sanitizer_check then
+            run.cases[#run.cases + 1] = doc
+        elseif doc.verdict ~= "accepted" and doc.verdict ~= "time_limit_exceeded" then
+            -- The case that failed in the sanitizer check takes the place of
+            -- its first run, as in lc's verdict. The others passed already, and
+            -- running out of time there doesn't count.
+            local at = #run.cases + 1
+            for i, c in ipairs(run.cases) do
+                if c.index == doc.index then
+                    at = i
+                    break
+                end
+            end
+            run.cases[at] = doc
+        end
         if doc.verdict == "runtime_error" and doc.stderr then
             -- A place that several cases' reports point at is shown once, for
             -- the first (their messages differ only in the values).
@@ -848,6 +897,7 @@ local function on_exit(run, code, stderr, signal)
         verdict = run.error and "error" or done.verdict or (run.killed and "none") or "error",
         passed = done.passed,
         total = done.total,
+        sanitizer_check = done.sanitizer_check,
         error = run.error,
         solution = run.src,
         problem = run.info,
@@ -1064,7 +1114,10 @@ function M.status()
     elseif run.cancelling then
         return "lc: cancelling"
     elseif run.running then
-        return ("lc %s: %d/%d"):format(run.kind, run.running.index + 1, run.running.total)
+        local r = run.running
+        return ("lc %s: %s%d/%d"):format(run.kind, r.sanitizer_check and "sanitizers " or "", r.index + 1, r.total)
+    elseif run.check_build then
+        return ("lc %s: sanitizers"):format(run.kind)
     elseif not run.build_done then
         return ("lc %s: building"):format(run.kind)
     end
@@ -1218,7 +1271,8 @@ function M.add_case()
         ui.notify(("lc: %s is one of your cases already"):format(label))
         return
     end
-    local lines = { ("# From lc %s: %s, %s"):format(run.kind, label:lower(), M.verdict_name(c.verdict)) }
+    local verdict = M.verdict_name(c.verdict) .. (c.sanitizer_check and " with the sanitizers" or "")
+    local lines = { ("# From lc %s: %s, %s"):format(run.kind, label:lower(), verdict) }
     for _, input in ipairs(c.inputs or {}) do
         lines[#lines + 1] = input.value
     end

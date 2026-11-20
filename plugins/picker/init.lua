@@ -27,19 +27,28 @@
 --                    recompute the items externally (pair with filter="none")
 --   query_debounce   ms delay before on_query fires (default 120)
 --   on_close(p)      cleanup hook: stop jobs/timers the caller owns
+--   keys             extra keys for the prompt, { [lhs] = fn(p) }, mapped in
+--                    insert and normal mode (they win over the built-in
+--                    ones). fn gets the controller while the picker is still
+--                    open, so it can read p:query() and p:selection() before
+--                    it calls p:close(). Something that opens another picker
+--                    or prompts should do so from vim.schedule, once the
+--                    key's mapping has finished.
+--   footer           hint text on the bottom border, e.g. what `keys` do
 --
 -- M.open returns a controller `p`. Async producers hold onto it and use:
 --   p:add_items(list)  append items and refresh (debounced, cheap per chunk)
 --   p:set_items(list)  replace all items and refresh now
 --   p:query()          current prompt text, trimmed
+--   p:selection()      the highlighted item, or nil
 --   p:count()          number of items currently held
 --   p:valid()          false once closed or superseded; check before touching
+--   p:choose()         what <CR> does: close, then select the highlighted item
 --   p:close()          tear down (also runs on <Esc>, <CR>, window close)
 --
 -- Only one picker is open at a time; opening a new one closes the old one.
 -- Keys: <CR> select; <Esc> close (normal mode); <Up>/<Down> move (any mode);
--- j/k/gg/G move (normal mode). Extra buffer-local maps can be added to
--- p.ui.prompt_buf after open().
+-- j/k/gg/G move (normal mode); plus whatever opts.keys adds.
 --
 -- M.setup() puts the project in front of the file name on the statusline,
 -- "neo: sub/file.txt" for the sub/file.txt open_file gives a picked file
@@ -76,6 +85,10 @@ end
 
 function Picker:count()
     return #self.items
+end
+
+function Picker:selection()
+    return self.filtered[self.selected]
 end
 
 -- Re-filter items against the prompt and render from the top.
@@ -121,6 +134,16 @@ function Picker:add_items(items)
     self._debounced_refresh()
 end
 
+-- Close, then hand the highlighted item to on_select (or its own .action).
+-- Nothing is selected when the list is empty.
+function Picker:choose()
+    local sel = self:selection()
+    self:close()
+    if not sel then return end
+    local action = self.on_select or sel.action
+    if action then action(sel) end
+end
+
 function Picker:close()
     if self.closed then return end
     self.closed = true
@@ -137,16 +160,10 @@ function Picker:close()
     self.items, self.filtered, self.selected = {}, {}, 0
 end
 
-local function setup_keymaps(self)
+local function setup_keymaps(self, keys)
     local opts = { buffer = self.ui.prompt_buf, silent = true, nowait = true }
 
-    vim.keymap.set({ "i", "n" }, "<CR>", function()
-        local sel = self.filtered[self.selected]
-        self:close()
-        if not sel then return end
-        local action = self.on_select or sel.action
-        if action then action(sel) end
-    end, opts)
+    vim.keymap.set({ "i", "n" }, "<CR>", function() self:choose() end, opts)
 
     vim.keymap.set("n", "<Esc>", function() self:close() end, opts)
 
@@ -157,6 +174,10 @@ local function setup_keymaps(self)
     vim.keymap.set("n", "gg", function() self:select(1) end, opts)
     vim.keymap.set("n", "go", function() self:select(1) end, opts)
     vim.keymap.set("n", "G", function() self:select(#self.filtered) end, opts)
+
+    for lhs, fn in pairs(keys or {}) do
+        vim.keymap.set({ "i", "n" }, lhs, function() fn(self) end, opts)
+    end
 end
 
 local function setup_autocmds(self)
@@ -201,7 +222,9 @@ function M.open(opts)
         closed = false,
     }, Picker)
 
-    self.ui = ui.create({ title = opts.title, width = opts.width, height = opts.height })
+    self.ui = ui.create({
+        title = opts.title, footer = opts.footer, width = opts.width, height = opts.height,
+    })
     active = self
 
     self._debounced_refresh = util.debounce(FILTER_DEBOUNCE_MS, function() self:refresh() end)
@@ -211,7 +234,7 @@ function M.open(opts)
         end)
     end
 
-    setup_keymaps(self)
+    setup_keymaps(self, opts.keys)
     setup_autocmds(self)
     vim.cmd("startinsert!")
     self:refresh()

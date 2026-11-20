@@ -38,6 +38,12 @@ function M.set_namer(fn)
     names = {}
 end
 
+-- Drop the remembered names, for when the namer's answers change (the
+-- projects plugin calls it when the tracked set does).
+function M.forget()
+    names = {}
+end
+
 -- The name of the project at dir (default: the current window's working
 -- directory), or nil when dir is the home directory or a root.
 function M.project(dir)

@@ -1,0 +1,267 @@
+-- lua/neo/plugins/anchor/init.lua
+-- Anchor: a few files per project, each in a numbered slot you jump to
+-- with one key. A simplified harpoon: one list per project, no extensions,
+-- no terminal or tmux navigation.
+--
+-- A project is the working directory (this window's, so :lcd and :tcd
+-- count); :Projects moves it to the project root, so a switch brings that
+-- project's list along. Files inside the project are stored relative to
+-- it, others as absolute paths.
+--
+-- :Anchor {command} (<Tab> completes; :Anchor alone is :Anchor menu)
+--   add       anchor the current file in the first empty slot (or a new
+--             one at the end); a file already anchored stays where it is
+--   remove    empty the current file's slot; the other files keep their
+--             numbers
+--   menu      edit the list (below)
+--   {N}       open the file in slot N in the current window
+-- keybinds/anchor.lua maps <leader>a (add), <leader>m (menu) and
+-- <leader>1 to <leader>4 (slots 1 to 4).
+--
+-- Only files can be anchored: not netrw listings, terminals, help, or
+-- scratch and unnamed buffers. Opening a file that is already open
+-- switches to its buffer, where Neovim keeps your place; one that isn't
+-- goes to the '" mark, the last place you were in it (Neovim keeps it in
+-- shada across restarts), and the view is centered. A slot whose file has
+-- gone says so instead of opening an empty buffer.
+--
+-- The menu is a float over the list, one file per line, and line N is
+-- slot N; a blank line is an empty slot. Edit it as text: dd deletes a
+-- line (moving the lines below it up a slot), clearing a line (cc<Esc>)
+-- empties the slot in place, moving lines moves files between slots, and
+-- typing a path anchors that file. A path seen on an earlier line is
+-- dropped, leaving its line empty. Keys: <CR> opens the file on the
+-- cursor line in the window you came from; q or <Esc> closes. Leaving the
+-- menu in any way (those keys, :q, <C-w>w, ...) saves it, and :w (or
+-- <C-;>) saves it without leaving.
+--
+-- The lists live in one JSON file, stdpath("data")/neo/anchor.json, read
+-- afresh on every use, so several Neovims share them (see store.lua).
+-- setup({ file = path }) puts it elsewhere.
+--
+-- The tests: nvim -l path/to/plugins/anchor/test.lua
+
+local store = require("neo.plugins.anchor.store")
+
+local M = {}
+
+local function notify(msg, level)
+    vim.notify("anchor: " .. msg, level or vim.log.levels.INFO)
+end
+
+local function vim_error(err)
+    err = tostring(err)
+    return err:match("E%d+:.*") or err
+end
+
+local function menu()
+    return require("neo.plugins.anchor.menu")
+end
+
+local function index_of(slots, stored)
+    for i, slot in ipairs(slots) do
+        if slot ~= "" and store.same(slot, stored) then
+            return i
+        end
+    end
+    return nil
+end
+
+local function save(root, slots)
+    local ok, err = store.set(root, slots)
+    if not ok then
+        notify("couldn't save the list: " .. tostring(err), vim.log.levels.ERROR)
+    end
+    return ok
+end
+
+--- The current project's slots, as stored ("" is an empty slot).
+function M.list()
+    return store.get(store.root())
+end
+
+--- :Anchor add. Returns the slot the current file is in, or nil.
+function M.add()
+    local file = store.file_of(0)
+    if not file then
+        notify("only files can be anchored", vim.log.levels.WARN)
+        return nil
+    end
+    local root = store.root()
+    local slots = store.get(root)
+    local stored = store.to_stored(file, root)
+    local at = index_of(slots, stored)
+    if at then
+        notify(("%s is already in slot %d"):format(stored, at))
+        return at
+    end
+    at = #slots + 1
+    for i, slot in ipairs(slots) do
+        if slot == "" then
+            at = i
+            break
+        end
+    end
+    slots[at] = stored
+    if not save(root, slots) then
+        return nil
+    end
+    notify(("%s is in slot %d"):format(stored, at))
+    return at
+end
+
+--- :Anchor remove. Returns the slot the current file was in, or nil.
+function M.remove()
+    local file = store.file_of(0)
+    if not file then
+        notify("only files can be anchored", vim.log.levels.WARN)
+        return nil
+    end
+    local root = store.root()
+    local slots = store.get(root)
+    local stored = store.to_stored(file, root)
+    local at = index_of(slots, stored)
+    if not at then
+        notify(stored .. " isn't anchored")
+        return nil
+    end
+    slots[at] = ""
+    if not save(root, slots) then
+        return nil
+    end
+    notify(("%s is out of slot %d"):format(stored, at))
+    return at
+end
+
+-- The loaded buffer of file (absolute, resolved), or nil.
+local function find_buf(file)
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        if vim.api.nvim_buf_is_loaded(b) then
+            local name = vim.api.nvim_buf_get_name(b)
+            if name ~= "" and vim.bo[b].buftype == "" and store.same(store.real(name), file) then
+                return b
+            end
+        end
+    end
+    return nil
+end
+
+-- Opens file (absolute) in the current window. Returns true, or false
+-- and why not.
+local function edit(file)
+    file = store.real(file)
+    local buf = find_buf(file)
+    if buf and buf == vim.api.nvim_get_current_buf() then
+        return true
+    end
+    local ok, err
+    if buf then
+        -- Neovim puts the cursor back where it was in this buffer.
+        ok, err = pcall(vim.api.nvim_set_current_buf, buf)
+    else
+        if not vim.uv.fs_stat(file) then
+            return false, store.to_stored(file, store.root()) .. " no longer exists"
+        end
+        -- Relative to the working directory when inside it, so the buffer
+        -- gets a short name.
+        ok, err = pcall(vim.cmd, "edit " .. vim.fn.fnameescape(vim.fn.fnamemodify(file, ":.")))
+        if ok then
+            local mark = vim.api.nvim_buf_get_mark(0, '"')
+            if mark[1] > 0 and mark[1] <= vim.api.nvim_buf_line_count(0) then
+                pcall(vim.api.nvim_win_set_cursor, 0, mark)
+            end
+        end
+    end
+    if not ok then
+        return false, vim_error(err)
+    end
+    vim.cmd("normal! zz")
+    return true
+end
+
+--- :Anchor N: opens the file in slot n in the current window. Returns
+--- true, or false.
+function M.select(n)
+    -- From the menu (<leader>N works there too), save and leave it first,
+    -- for the window it was opened from.
+    if menu().is_current() and not menu().close() then
+        return false
+    end
+    local root = store.root()
+    local slot = store.get(root)[n]
+    if not slot or slot == "" then
+        notify(("slot %d is empty"):format(n))
+        return false
+    end
+    local ok, err = edit(store.to_abs(slot, root))
+    if not ok then
+        notify(err, vim.log.levels.WARN)
+    end
+    return ok
+end
+
+--- :Anchor menu: the editable list. Returns its buffer and window.
+function M.menu()
+    return menu().open()
+end
+
+M.commands = {
+    add = M.add,
+    remove = M.remove,
+    menu = M.menu,
+}
+
+local function names()
+    local list = vim.tbl_keys(M.commands)
+    table.sort(list)
+    return list
+end
+
+--- Runs :Anchor with its argument (nil for none).
+function M.command(arg)
+    arg = arg or "menu"
+    local n = arg:match("^%d+$") and tonumber(arg)
+    if n and n > 0 then
+        return M.select(n)
+    end
+    local cmd = M.commands[arg]
+    if not cmd then
+        notify(("unknown command '%s'; the commands are %s, or a slot number"):format(
+            arg, table.concat(names(), ", ")), vim.log.levels.ERROR)
+        return nil
+    end
+    return cmd()
+end
+
+--- Completes :Anchor's argument: the commands, and the filled slots.
+function M.complete(lead)
+    local out = {}
+    for _, name in ipairs(names()) do
+        if name:sub(1, #lead) == lead then
+            out[#out + 1] = name
+        end
+    end
+    for i, slot in ipairs(M.list()) do
+        if slot ~= "" and tostring(i):sub(1, #lead) == lead then
+            out[#out + 1] = tostring(i)
+        end
+    end
+    return out
+end
+
+--- opts.file: where the lists live (default stdpath("data")/neo/anchor.json).
+function M.setup(opts)
+    opts = opts or {}
+    if opts.file then
+        store.file = vim.fs.normalize(opts.file)
+    end
+    vim.api.nvim_create_user_command("Anchor", function(o)
+        M.command(o.fargs[1])
+    end, {
+        nargs = "?",
+        desc = "Anchor: add, remove, menu, or open slot N",
+        complete = M.complete,
+    })
+end
+
+return M

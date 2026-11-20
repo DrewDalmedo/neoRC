@@ -58,6 +58,8 @@ local function save(m, refresh)
         vim.notify("anchor: couldn't save the list: " .. tostring(err), vim.log.levels.ERROR)
         return nil
     end
+    -- the slot numbers on the statusline
+    pcall(vim.cmd, "redrawstatus!")
     if refresh then
         local shown = vim.deepcopy(slots)
         while #shown > 0 and shown[#shown] == "" do

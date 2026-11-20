@@ -25,6 +25,11 @@
 -- shada across restarts), and the view is centered. A slot whose file has
 -- gone says so instead of opening an empty buffer.
 --
+-- The statusline shows an anchored file's slot in front of its name,
+-- "[2] neo: sub/file.txt" (see picker/statusline.lua), going by each
+-- window's own project, so the number is the one that window's slot key
+-- opens.
+--
 -- The menu is a float over the list, one file per line, and line N is
 -- slot N; a blank line is an empty slot. Edit it as text: dd deletes a
 -- line (moving the lines below it up a slot), clearing a line (cc<Esc>)
@@ -71,13 +76,26 @@ local function save(root, slots)
     local ok, err = store.set(root, slots)
     if not ok then
         notify("couldn't save the list: " .. tostring(err), vim.log.levels.ERROR)
+        return false
     end
-    return ok
+    -- every window showing a file whose slot changed, not just this one
+    pcall(vim.cmd, "redrawstatus!")
+    return true
 end
 
 --- The current project's slots, as stored ("" is an empty slot).
 function M.list()
     return store.get(store.root())
+end
+
+--- The slot the file at path (absolute) is in, in the list of the project
+--- at dir (default: the current window's working directory), or nil. For
+--- the statusline, which asks on every redraw: the list is read again only
+--- once it has changed on disk (see store.peek), and nothing is reported.
+function M.slot(path, dir)
+    local root = dir and store.real(dir) or store.root()
+    local slots = store.get(root, store.peek())
+    return index_of(slots, store.to_stored(store.real(path), root))
 end
 
 --- :Anchor add. Returns the slot the current file is in, or nil.
@@ -255,6 +273,7 @@ function M.setup(opts)
     if opts.file then
         store.file = vim.fs.normalize(opts.file)
     end
+    require("neo.plugins.picker.statusline").set_slotter(M.slot)
     vim.api.nvim_create_user_command("Anchor", function(o)
         M.command(o.fargs[1])
     end, {

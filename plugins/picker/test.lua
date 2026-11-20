@@ -219,6 +219,38 @@ statusline.set_namer(function() error("boom") end)
 eq("namer error", statusline.label(), "proj: sub/file.txt")
 statusline.set_namer(nil)
 
+-- a slotter puts the file's slot in front; nil, a non-number, a number
+-- that isn't a slot or an error leaves it off
+local slot_args
+statusline.set_slotter(function(path, dir)
+    slot_args = { path, dir }
+    return 2
+end)
+eq("slot", statusline.slot(), 2)
+eq("slotter gets the file", slot_args[1], vim.api.nvim_buf_get_name(0))
+eq("slotter gets the dir", slot_args[2], vim.fn.getcwd())
+eq("slot in front of the label", statusline.file(), "[2] proj: sub/file.txt")
+eq("slot shown", shown():match("^%[2%] proj: sub/file%.txt ") ~= nil, true)
+vim.cmd("edit " .. vim.fn.fnameescape(tree .. "/proj/100%.txt"))
+eq("slot with a percent label", statusline.file(), "[2] proj: 100%%.txt")
+util.open_file(tree .. "/outside/far.txt")
+eq("slot in front of %f", statusline.file(), "[2] %f")
+eq("slot shown in front of %f", shown():match("^%[2%] .*far%.txt ") ~= nil, true)
+vim.cmd("enew")
+eq("no slot without a file", statusline.file(), "%f")
+vim.cmd("terminal")
+eq("no slot for a terminal", statusline.file(), "%f")
+vim.cmd("edit " .. vim.fn.fnameescape(tree .. "/proj/sub/file.txt"))
+for _, bad in ipairs({ "nil", "string", "zero", "fraction", "error" }) do
+    statusline.set_slotter(function()
+        if bad == "error" then error("boom") end
+        return ({ string = "2", zero = 0, fraction = 1.5 })[bad]
+    end)
+    eq("slotter " .. bad, statusline.file(), "proj: sub/file.txt")
+end
+statusline.set_slotter(nil)
+eq("no slotter", statusline.file(), "proj: sub/file.txt")
+
 -- the home directory and the root aren't projects
 local home = vim.uv.os_homedir()
 eq("home is no project", statusline.project(home), nil)

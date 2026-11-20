@@ -15,8 +15,8 @@
 --             numbers
 --   menu      edit the list (below)
 --   {N}       open the file in slot N in the current window
--- keybinds/anchor.lua maps <leader>a (add), <leader>m (menu), and <C-p>,
--- <C-t>, <C-s> and <C-n> (slots 1 to 4).
+-- keybinds/anchor.lua maps <leader>a (add), <leader>m (menu), and, with
+-- map() below, <C-p>, <C-t>, <C-s> and <C-n> (slots 1 to 4).
 --
 -- Only files can be anchored: not netrw listings, terminals, help, or
 -- scratch and unnamed buffers. Opening a file that is already open
@@ -25,10 +25,12 @@
 -- shada across restarts), and the view is centered. A slot whose file has
 -- gone says so instead of opening an empty buffer.
 --
--- The statusline shows an anchored file's slot in front of its name,
--- "[2] neo: sub/file.txt" (see picker/statusline.lua), going by each
--- window's own project, so the number is the one that window's slot key
--- opens.
+-- The statusline shows an anchored file's slot key in front of its name,
+-- "[C-t] neo: sub/file.txt" (see picker/statusline.lua), going by each
+-- window's own project, so it is the key that opens the file from that
+-- window. A slot without a key (one past the keys map() was given, or one
+-- whose key now does something else, say a buffer-local mapping) shows
+-- its number instead: "[5] neo: sub/file.txt".
 --
 -- The menu is a float over the list, one file per line, and line N is
 -- slot N; a blank line is an empty slot. Edit it as text: dd deletes a
@@ -96,6 +98,41 @@ function M.slot(path, dir)
     local root = dir and store.real(dir) or store.root()
     local slots = store.get(root, store.peek())
     return index_of(slots, store.to_stored(store.real(path), root))
+end
+
+-- The slot keys map() set: { [slot] = { lhs, callback } }.
+local slot_keys = {}
+
+--- Maps keys[i] in normal mode to open slot i (as :Anchor i does), and has
+--- the statusline show an anchored file's key instead of its slot number.
+function M.map(keys)
+    for i, lhs in ipairs(keys) do
+        local function go()
+            M.select(i)
+        end
+        vim.keymap.set("n", lhs, go, { desc = "Anchor: Go to Slot " .. i })
+        slot_keys[i] = { lhs = lhs, callback = go }
+    end
+end
+
+-- How the statusline shows slot n: its key, written as map() was given it
+-- with a lone <...> key's brackets dropped ("C-t" for <C-t>), as long as
+-- that key still opens the slot in the current buffer; else n.
+local function key_of(n)
+    local key = slot_keys[n]
+    if key and vim.fn.maparg(key.lhs, "n", false, true).callback == key.callback then
+        return key.lhs:match("^<([^<>]+)>$") or key.lhs
+    end
+    return tostring(n)
+end
+
+--- What the statusline shows for the file at path (absolute) in the
+--- project at dir: the key that opens its slot ("C-t"), else the slot's
+--- number ("5"), or nil when it isn't anchored. Like slot(), cheap enough
+--- for every redraw.
+function M.slot_label(path, dir)
+    local n = M.slot(path, dir)
+    return n and key_of(n) or nil
 end
 
 --- :Anchor add. Returns the slot the current file is in, or nil.
@@ -273,7 +310,7 @@ function M.setup(opts)
     if opts.file then
         store.file = vim.fs.normalize(opts.file)
     end
-    require("neo.plugins.picker.statusline").set_slotter(M.slot)
+    require("neo.plugins.picker.statusline").set_slotter(M.slot_label)
     vim.api.nvim_create_user_command("Anchor", function(o)
         M.command(o.fargs[1])
     end, {

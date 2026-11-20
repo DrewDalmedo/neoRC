@@ -456,6 +456,35 @@ eq("broken file: nothing reported", #notes, 0)
 eq("broken file: left in place", read_text(data), "not json {\n")
 write(data, { good })
 starts("fixed file: the slot again", "[3] proj: b.txt ")
+
+-- map(): the keys open their slots, and the statusline shows a file's key
+-- while it still opens the slot here; past the keys, or with the key
+-- taken over, the number
+store.set(R, { "a.txt", "b.txt", "sub/c.txt" })
+anchor.map({ "<C-p>", "<C-t>" })
+eq("map maps the key", vim.fn.maparg("<C-t>", "n", false, true).desc, "Anchor: Go to Slot 2")
+edit(proj .. "/a.txt")
+feed("<C-t>")
+eq("the key opens its slot", current_file(), R .. "/b.txt")
+starts("statusline shows the key", "[C-t] proj: b.txt ")
+eq("slot_label is the key", anchor.slot_label(R .. "/a.txt", proj), "C-p")
+eq("slot_label of a slot without a key", anchor.slot_label(R .. "/sub/c.txt", proj), "3")
+eq("slot_label of no slot", anchor.slot_label(R .. "/long.txt", proj), nil)
+edit(proj .. "/sub/c.txt")
+starts("statusline: a slot without a key", "[3] proj: sub/c.txt ")
+edit(proj .. "/b.txt")
+vim.keymap.set("n", "<C-t>", "<Nop>", { buffer = 0 })
+starts("statusline: a key taken over in the buffer", "[2] proj: b.txt ")
+vim.keymap.del("n", "<C-t>", { buffer = 0 })
+starts("statusline: the key back", "[C-t] proj: b.txt ")
+vim.keymap.set("n", "<C-t>", "<Nop>")
+starts("statusline: a key mapped to something else", "[2] proj: b.txt ")
+anchor.map({ "<leader>1", "<C-t>" })
+edit(proj .. "/a.txt")
+starts("statusline: a key that isn't a lone <...>", "[<leader>1] proj: a.txt ")
+vim.keymap.del("n", "<leader>1")
+vim.keymap.del("n", "<C-p>")
+vim.keymap.del("n", "<C-t>")
 vim.go.statusline = saved_statusline
 
 vim.notify = saved_notify

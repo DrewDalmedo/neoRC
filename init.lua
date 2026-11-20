@@ -1,5 +1,6 @@
 vim.g.mapleader = " "
 
+require("neo.plugins.picker").setup()
 require("neo.plugins.scope").setup()
 require("neo.plugins.projects").setup()
 require("neo.plugins.anchor").setup()

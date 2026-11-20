@@ -165,6 +165,39 @@ eq("scan keeps own names", find(items, "beta") ~= nil, true)
 eq("scan name ignored", find(items, "Ignored"), nil)
 eq("fuzzy matches renamed", fuzzy.filter(items, "blinky!")[1].name, "Blinky!")
 
+-- name(): the name the picker lists the project at a directory by, which
+-- setup() hands to the picker's statusline ("Blinky!: main.c")
+eq("name of a renamed single", projects.name(tmp .. "/Embedded/blinky"), "Blinky!")
+eq("name of a scanned project", projects.name(tmp .. "/Alpha/beta"), "beta")
+eq("name with a trailing slash", projects.name(tmp .. "/Alpha/beta/"), "beta")
+eq("untracked dir has no name", projects.name(tmp .. "/Embedded"), nil)
+eq("file entry is no project dir", projects.name(tmp .. "/notes.md"), nil)
+eq("missing dir has no name", projects.name(tmp .. "/Missing"), nil)
+if link_ok then
+    -- linked into a scanned dir: the link's name, whichever path is asked
+    eq("name through a symlink", projects.name(tmp .. "/linktarget"), "ulink")
+else
+    print("skip name through a symlink (fs_symlink unavailable)")
+end
+local statusline = require("neo.plugins.picker.statusline")
+eq("statusline names tracked projects", statusline.project(tmp .. "/Embedded/blinky"), "Blinky!")
+eq("statusline names the rest by basename", statusline.project(tmp .. "/Embedded"), "Embedded")
+local cwd_before = vim.fn.getcwd()
+vim.cmd("cd " .. vim.fn.fnameescape(tmp .. "/Embedded/blinky"))
+vim.cmd("edit main.c")
+eq("statusline label in a named project", statusline.label(), "Blinky!: main.c")
+vim.cmd("bwipeout")
+vim.cmd("cd " .. vim.fn.fnameescape(cwd_before))
+
+-- the statusline asks name() as it draws: malformed entries are skipped
+-- without a word there (open() and items() still complain)
+notified = nil
+vim.notify = function(msg) notified = msg end
+projects.setup({ dirs = { { single = true }, tmp .. "/Alpha" } })
+eq("name past a malformed entry", projects.name(tmp .. "/Alpha/beta"), "beta")
+eq("name doesn't notify", notified, nil)
+vim.notify = saved_notify
+
 -- setup{dirs} replaces the tracked set outright
 projects.setup({ dirs = { tmp .. "/Embedded" } })
 items = projects.items()

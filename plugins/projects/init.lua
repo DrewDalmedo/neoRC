@@ -39,8 +39,14 @@
 -- "\\server\..." and drive-letter ("C:/...") paths are used as written.
 -- Entries that don't exist are skipped silently, so one list can serve
 -- every machine the config is deployed to.
+--
+-- setup() also names projects for the picker's statusline (see
+-- picker/statusline.lua): with a project as the working directory, files
+-- in it show as "Config: init.lua", under the name the picker lists the
+-- project by.
 local picker = require("neo.plugins.picker")
 local util = require("neo.plugins.picker.util")
+local statusline = require("neo.plugins.picker.statusline")
 
 local M = {}
 
@@ -80,14 +86,17 @@ local function parse_entry(raw)
 end
 
 -- Parse the configured entries and keep those that exist with the right
--- type; complain about malformed ones instead of dropping them silently.
-local function tracked_entries()
+-- type; complain about malformed ones instead of dropping them silently
+-- (unless quiet: the statusline can't be notifying).
+local function tracked_entries(quiet)
     local out = {}
     for _, raw in ipairs(config.dirs) do
         local entry = parse_entry(raw)
         if not entry then
-            vim.notify("projects: ignoring malformed dirs entry: "
-                .. vim.inspect(raw, { newline = " ", indent = "" }), vim.log.levels.WARN)
+            if not quiet then
+                vim.notify("projects: ignoring malformed dirs entry: "
+                    .. vim.inspect(raw, { newline = " ", indent = "" }), vim.log.levels.WARN)
+            end
         else
             local stat = vim.uv.fs_stat(entry.path)
             if stat and stat.type == (entry.kind == "file" and "file" or "directory") then
@@ -188,6 +197,19 @@ function M.items()
     return build_items(tracked_entries())
 end
 
+-- The name the picker lists the project at dir by, or nil when dir isn't
+-- a tracked project. Real paths are compared, so a symlink on either side
+-- (a config dir linked from dotfiles) still matches.
+function M.name(dir)
+    local real = vim.uv.fs_realpath(dir)
+    if not real then return nil end
+    for _, item in ipairs(build_items(tracked_entries(true))) do
+        if not item.file and vim.uv.fs_realpath(item.path) == real then
+            return item.name
+        end
+    end
+end
+
 -- Make `path` (resolved like a dirs entry) the active project. Every open
 -- buffer is killed so nothing from the old project lingers: modified
 -- buffers backed by a real file are saved first, while scratch, terminal,
@@ -262,6 +284,7 @@ end
 function M.setup(opts)
     opts = opts or {}
     config.dirs = opts.dirs or override_dirs() or M.default_dirs
+    statusline.set_namer(M.name)
     vim.api.nvim_create_user_command("Projects", M.open, { desc = "Projects: select a project" })
 end
 

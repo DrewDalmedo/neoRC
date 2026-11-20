@@ -19,7 +19,11 @@
 --   <C-n>  new project: choose the tracked directory it goes in (skipped
 --          when only one can hold projects; the highlighted project's own
 --          is offered first), name it (the prompt starts out with what you
---          had typed), and switch into it as <CR> would
+--          had typed), and switch into it as <CR> would. A git URL instead
+--          of a name (https://..., git@host:..., optionally followed by
+--          the directory to clone into) or a whole "git clone ..." line
+--          clones the repository there and switches into the clone once
+--          git is done; the editor stays usable meanwhile
 --   <C-t>  track a directory, read like a dirs entry below ("Work" is
 --          ~/Work) and created when it doesn't exist; one with no projects
 --          yet goes straight on to naming its first
@@ -455,20 +459,30 @@ function M.untrack(path)
     return save(saved)
 end
 
+-- What's wrong with name (trimmed) as a project's directory name, or nil:
+-- it's one directory, so no / or \, and no leading dot (the picker hides
+-- those).
+local function bad_name(name)
+    if name == "" then
+        return "a project needs a name"
+    end
+    if name:find("[/\\]") then
+        return "a project name can't contain / or \\: " .. name
+    end
+    if name:sub(1, 1) == "." then
+        return "a project name can't start with a dot: " .. name
+    end
+end
+
 --- Make the directory for a project called name in parent (resolved like
 --- a dirs entry). name is a single directory: no / or \, and no leading
 --- dot (the picker hides those). Returns the new path, or nil and an
 --- error; nothing is created on an error.
 function M.create_project(parent, name)
     name = vim.trim(name or "")
-    if name == "" then
-        return nil, "a project needs a name"
-    end
-    if name:find("[/\\]") then
-        return nil, "a project name can't contain / or \\: " .. name
-    end
-    if name:sub(1, 1) == "." then
-        return nil, "a project name can't start with a dot: " .. name
+    local bad = bad_name(name)
+    if bad then
+        return nil, bad
     end
     parent = M.resolve(parent)
     local stat = vim.uv.fs_stat(parent)
@@ -668,6 +682,127 @@ function M.delete_prompt(opts)
     })
 end
 
+-- Whether s looks like a git URL: scheme://... or scp-like user@host:path.
+-- A project name never does (it can't hold a slash or start like this).
+local function git_url(s)
+    return s:match("^%a[%w+.-]*://.") ~= nil or s:match("^[%w._-]+@[%w._-]+:.") ~= nil
+end
+
+--- The arguments for git clone when text asks for a clone rather than
+--- naming a new project, else nil (or nil and an error for a clone that
+--- can't work). "git clone <args>" passes args to git as they are (a
+--- leading ~ expanded, as a shell would); a git URL, optionally followed
+--- by the directory name to clone into, clones that.
+function M.clone_args(text)
+    local words = vim.split(vim.trim(text or ""), "%s+", { trimempty = true })
+    if words[1] == "git" and words[2] == "clone" then
+        local args = {}
+        for i = 3, #words do
+            local word = words[i]
+            if word == "~" or word:match("^~[/\\]") then
+                word = vim.fs.normalize(word)
+            end
+            args[#args + 1] = word
+        end
+        if #args == 0 then
+            return nil, "git clone needs a repository to clone"
+        end
+        return args
+    end
+    if not (words[1] and git_url(words[1])) then
+        return nil
+    end
+    if #words > 2 then
+        return nil, "after a git URL, give at most the directory to clone into"
+    end
+    if words[2] then
+        local bad = bad_name(words[2])
+        if bad then return nil, bad end
+    end
+    return words
+end
+
+-- The names of parent's entries, as a set.
+local function entry_names(parent)
+    local names = {}
+    pcall(function()
+        for name in vim.fs.dir(parent) do
+            names[name] = true
+        end
+    end)
+    return names
+end
+
+--- Run git clone args (see M.clone_args) in parent (resolved like a dirs
+--- entry), in the background, and switch into the clone once git is done.
+--- git runs without a terminal, so where it would stop to ask for a
+--- password or to trust a new host it fails instead, and says why. The
+--- clone is the directory that appears in parent. on_done(path) follows
+--- the switch, or on_done(nil, err) a failure (already reported). Returns
+--- git's process (vim.SystemObj), or nil when it couldn't start.
+function M.clone(parent, args, on_done)
+    on_done = on_done or function() end
+    parent = M.resolve(parent)
+    local stat = vim.uv.fs_stat(parent)
+    if not stat or stat.type ~= "directory" then
+        local err = "not a directory: " .. short(parent)
+        vim.notify("projects: " .. err, vim.log.levels.ERROR)
+        return on_done(nil, err)
+    end
+    local before = entry_names(parent)
+    local function fail(err)
+        vim.notify("projects: " .. err, vim.log.levels.ERROR)
+        on_done(nil, err)
+    end
+    local ok, proc = pcall(vim.system, vim.list_extend({ "git", "clone" }, args), {
+        cwd = parent,
+        text = true,
+        -- a session of its own, with no terminal for ssh to prompt on
+        detach = true,
+        env = { GIT_TERMINAL_PROMPT = "0" },
+    }, vim.schedule_wrap(function(res)
+        if res.code ~= 0 then
+            local lines = {}
+            for line in (res.stderr or ""):gmatch("[^\r\n]+") do
+                if line:match("^fatal:") or line:match("^error:") then
+                    lines[#lines + 1] = line
+                end
+            end
+            local why = #lines > 0 and table.concat(lines, "\n") or vim.trim(res.stderr or "")
+            return fail(("git clone failed (exit %d):\n%s"):format(res.code, why))
+        end
+        local made = {}
+        for name in pairs(entry_names(parent)) do
+            local path = vim.fs.joinpath(parent, name)
+            if not before[name] and vim.fn.isdirectory(path) == 1 then
+                made[#made + 1] = path
+            end
+        end
+        if #made ~= 1 then
+            return fail(("cloned, but can't tell which new directory in %s is the clone")
+                :format(short(parent)))
+        end
+        M.switch(made[1])
+        on_done(made[1])
+    end))
+    if not ok then
+        return fail("couldn't run git: " .. tostring(proc))
+    end
+    -- named after the repository (the last URL among args, else the last
+    -- arg), kept to one line so it doesn't stop for a "Press ENTER"
+    local repo = args[#args]
+    for _, arg in ipairs(args) do
+        if git_url(arg) then repo = arg end
+    end
+    repo = vim.fs.basename((repo:gsub("[/\\]+$", ""))):gsub("%.git$", "")
+    local msg = ("projects: cloning %s into %s/"):format(repo, short(parent))
+    if #msg > vim.v.echospace then
+        msg = "projects: cloning " .. repo
+    end
+    vim.notify(msg)
+    return proc
+end
+
 -- Directory completion for prompts, as a vim.ui.input completion spec.
 local COMPLETE_DIR = "customlist,v:lua.require'neo.plugins.projects'.complete_dir"
 
@@ -687,10 +822,19 @@ end
 --- Make a new project and switch into it. Asks which tracked directory it
 --- goes in, unless opts.parent gives it or only one can hold projects
 --- (opts.near is the entry to offer first), then for its name, unless
---- opts.name gives it (opts.default pre-fills the prompt).
+--- opts.name gives it (opts.default pre-fills the prompt). A git URL or a
+--- "git clone ..." line in place of the name clones it (see M.clone).
 function M.new_project(opts)
     opts = opts or {}
     local function create(parent, name)
+        local args, bad = M.clone_args(name)
+        if bad then
+            vim.notify("projects: " .. bad, vim.log.levels.ERROR)
+            return
+        end
+        if args then
+            return M.clone(parent, args)
+        end
         local path, err = M.create_project(parent, name)
         if not path then
             vim.notify("projects: " .. err, vim.log.levels.ERROR)
@@ -703,7 +847,7 @@ function M.new_project(opts)
             return create(parent, opts.name)
         end
         vim.ui.input({
-            prompt = ("New project in %s/: "):format(short(parent)),
+            prompt = ("New project in %s/ (name or git URL): "):format(short(parent)),
             default = opts.default,
         }, function(name)
             if name and vim.trim(name) ~= "" then

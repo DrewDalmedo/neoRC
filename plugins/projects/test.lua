@@ -867,6 +867,110 @@ eq("protected untracked anyway", find(projects.items(), "fakecfg"), nil)
 eq("protected left on disk", vim.fn.isdirectory(fake_config .. "/lua/neo"), 1)
 confirm_answer = 2
 
+-- clone_args(): what counts as asking for a clone
+local function args_of(text)
+    local a, e = projects.clone_args(text)
+    return a and table.concat(a, " ") or e and ("ERR " .. e) or nil
+end
+eq("a plain name isn't a clone", args_of("myproject"), nil)
+eq("a name with spaces isn't a clone", args_of("my project"), nil)
+eq("https URL", args_of("https://example.com/a/b.git"), "https://example.com/a/b.git")
+eq("scp-like URL", args_of("git@github.com:a/b.git"), "git@github.com:a/b.git")
+eq("ssh URL", args_of("ssh://git@host/a/b"), "ssh://git@host/a/b")
+eq("URL and a name", args_of("  https://example.com/a/b.git   mine "), "https://example.com/a/b.git mine")
+eq("URL and a bad name", (args_of("https://example.com/a/b.git a/b") or ""):find("can't contain") ~= nil, true)
+eq("URL and a dotted name", (args_of("https://example.com/a/b.git .b") or ""):find("dot") ~= nil, true)
+eq("URL and too much", (args_of("https://example.com/a/b.git one two") or ""):find("at most") ~= nil, true)
+eq("git clone passes args through", args_of("git clone --depth 1 -b main https://example.com/a.git dir"),
+    "--depth 1 -b main https://example.com/a.git dir")
+eq("git clone expands ~", args_of("git clone ~/src/repo"), n("~/src/repo"))
+eq("git clone with nothing", (args_of("git clone") or ""):find("needs a repository") ~= nil, true)
+
+-- clone(): git runs in the background in the tracked directory, then the
+-- clone is switched into. A local repository stands in for a remote one.
+if vim.fn.executable("git") == 1 then
+    local src = tmp .. "/upstream"
+    local function git(...)
+        return vim.system(vim.list_extend({ "git", "-c", "user.name=t", "-c", "user.email=t@t",
+            "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main" }, { ... }), { text = true }):wait()
+    end
+    git("init", "-q", src)
+    vim.fn.writefile({ "hello" }, src .. "/README")
+    git("-C", src, "add", "README")
+    git("-C", src, "commit", "-q", "-m", "init")
+    vim.fn.mkdir(tmp .. "/Repos", "p")
+    reset_store()
+    projects.setup({ dirs = { tmp .. "/Repos" } })
+
+    local finished, cloned, clone_err
+    local function on_done(path, e) finished, cloned, clone_err = true, path, e end
+    local function wait_clone() vim.wait(30000, function() return finished end, 20) end
+
+    -- a file:// URL, named after the repository
+    finished, switched = false, nil
+    capture()
+    eq("clone starts", projects.clone(tmp .. "/Repos", { "file://" .. src }, on_done) ~= nil, true)
+    eq("clone says it's cloning, by the repository's name", noted("cloning upstream"), true)
+    wait_clone()
+    vim.notify = saved_notify
+    eq("clone made the repository", vim.fn.filereadable(tmp .. "/Repos/upstream/README"), 1)
+    eq("clone is a git checkout", vim.fn.isdirectory(tmp .. "/Repos/upstream/.git"), 1)
+    eq("clone hands back the path", cloned and n(cloned), n(tmp .. "/Repos/upstream"))
+    eq("clone switches into it", switched, n(tmp .. "/Repos/upstream"))
+
+    -- through the new-project prompt: a URL and a name for the directory
+    interact({ "file://" .. src .. " renamed" })
+    projects.new_project({})
+    vim.wait(30000, function() return switched ~= nil end, 20)
+    eq("prompt mentions git URLs", prompts[1].prompt:find("git URL", 1, true) ~= nil, true)
+    eq("URL and name clones under that name", switched, n(tmp .. "/Repos/renamed"))
+    eq("named clone has the files", vim.fn.filereadable(tmp .. "/Repos/renamed/README"), 1)
+
+    -- a whole git clone line, options and all
+    interact({ "git clone --depth 1 file://" .. src .. " shallow" })
+    projects.new_project({})
+    vim.wait(30000, function() return switched ~= nil end, 20)
+    eq("git clone line clones", switched, n(tmp .. "/Repos/shallow"))
+    local depth = git("-C", tmp .. "/Repos/shallow", "rev-parse", "--is-shallow-repository")
+    eq("git clone line keeps its options", vim.trim(depth.stdout or ""), "true")
+
+    -- :Projects new with a URL
+    interact({})
+    vim.cmd("Projects new file://" .. src .. " fromcmd")
+    vim.wait(30000, function() return switched ~= nil end, 20)
+    eq(":Projects new <url> clones", switched, n(tmp .. "/Repos/fromcmd"))
+
+    -- a clone that fails is reported with git's reason and switches nowhere
+    finished, switched = false, nil
+    capture()
+    projects.clone(tmp .. "/Repos", { "file://" .. tmp .. "/no-such-repo" }, on_done)
+    wait_clone()
+    vim.notify = saved_notify
+    eq("failed clone reported", noted("git clone failed"), true)
+    eq("failed clone gives git's reason", noted("fatal:"), true)
+    eq("failed clone hands back an error", cloned == nil and clone_err ~= nil, true)
+    eq("failed clone switches nowhere", switched, nil)
+    eq("failed clone leaves nothing", vim.fn.isdirectory(tmp .. "/Repos/no-such-repo"), 0)
+
+    -- an existing name is git's to refuse
+    finished = false
+    capture()
+    projects.clone(tmp .. "/Repos", { "file://" .. src }, on_done)
+    wait_clone()
+    vim.notify = saved_notify
+    eq("clone onto an existing dir refused", noted("already exists"), true)
+
+    -- a bad name after the URL never reaches git
+    interact({ "file://" .. src .. " a/b" })
+    capture()
+    projects.new_project({})
+    vim.notify = saved_notify
+    eq("bad clone name reported", noted("can't contain"), true)
+    eq("bad clone name runs nothing", noted("cloning"), false)
+else
+    print("skip clone tests (git unavailable)")
+end
+
 projects.switch, vim.ui.input = saved_switch, saved_input
 vim.fn.confirm = nil
 reset_store()

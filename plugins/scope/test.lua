@@ -204,6 +204,27 @@ if cmd[1] == "rg" then
     eq("rg ignores outside git repos too", vim.tbl_contains(cmd, "--no-require-git"), true)
 end
 
+-- opening a picked file: the pickers pass absolute paths, and one inside
+-- the working directory gets a short buffer name; the line/col jump holds
+local util = require("neo.plugins.picker.util")
+local tree = vim.fn.tempname()
+vim.fn.mkdir(tree .. "/proj/sub", "p")
+vim.fn.mkdir(tree .. "/outside", "p")
+vim.fn.writefile({ "one", "two", "three" }, tree .. "/proj/sub/file.txt")
+vim.fn.writefile({ "x" }, tree .. "/outside/far.txt")
+local saved_cwd = vim.fn.getcwd()
+vim.cmd("cd " .. vim.fn.fnameescape(tree .. "/proj"))
+local cwd = vim.fn.getcwd()
+util.open_file(vim.fs.joinpath(cwd, "sub/file.txt"), 3, 2)
+eq("open_file short name inside cwd", vim.fn.bufname(), "sub/file.txt")
+eq("open_file line", vim.fn.line("."), 3)
+eq("open_file col", vim.fn.col("."), 2)
+local far = vim.fs.normalize(vim.uv.fs_realpath(tree .. "/outside/far.txt"))
+util.open_file(far)
+eq("open_file outside cwd keeps the full path", vim.fs.normalize(vim.fn.bufname()), far)
+vim.cmd("cd " .. vim.fn.fnameescape(saved_cwd))
+vim.fn.delete(tree, "rf")
+
 if failures > 0 then
     print("FAILURES: " .. failures)
     os.exit(1)

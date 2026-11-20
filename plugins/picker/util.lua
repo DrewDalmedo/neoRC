@@ -30,9 +30,12 @@ function M.debounce(ms, fn)
     })
 end
 
--- Open a file in the current window, optionally jumping to line/col.
+-- Open a file in the current window, optionally jumping to line/col. A
+-- path inside the working directory is opened relative to it, so the
+-- buffer gets a short name (sub/file.txt) rather than the absolute path
+-- it would otherwise keep (~/Projects/neo/sub/file.txt).
 function M.open_file(path, line, col)
-    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    vim.cmd("edit " .. vim.fn.fnameescape(vim.fn.fnamemodify(path, ":.")))
     if line and col then
         pcall(vim.api.nvim_win_set_cursor, 0, { line, math.max(col - 1, 0) })
     end

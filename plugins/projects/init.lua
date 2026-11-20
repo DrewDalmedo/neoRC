@@ -61,8 +61,14 @@
 -- it (unless it lists them already), untracked entries are left out of
 -- it, and tracking an untracked entry again brings it back with its
 -- configured options.
+--
+-- setup() also names projects for the picker's statusline (see
+-- picker/statusline.lua): with a project as the working directory, files
+-- in it show as "Config: init.lua", under the name the picker lists the
+-- project by.
 local picker = require("neo.plugins.picker")
 local util = require("neo.plugins.picker.util")
+local statusline = require("neo.plugins.picker.statusline")
 local store = require("neo.plugins.projects.store")
 
 local M = {}
@@ -111,15 +117,19 @@ end
 -- (malformed ones complained about rather than dropped silently) minus
 -- those untracked from the picker, then the directories tracked from the
 -- picker that the configured set doesn't already list. Saved ones carry
--- saved = true.
-local function all_entries()
-    local saved = store.read()
+-- saved = true. quiet is for the statusline, which can't be notifying:
+-- malformed entries are skipped without a word, and a broken
+-- projects.json is left for a louder read to report.
+local function all_entries(quiet)
+    local saved = store.read(quiet)
     local out, listed = {}, {}
     for _, raw in ipairs(config.dirs) do
         local entry = parse_entry(raw)
         if not entry then
-            vim.notify("projects: ignoring malformed dirs entry: "
-                .. vim.inspect(raw, { newline = " ", indent = "" }), vim.log.levels.WARN)
+            if not quiet then
+                vim.notify("projects: ignoring malformed dirs entry: "
+                    .. vim.inspect(raw, { newline = " ", indent = "" }), vim.log.levels.WARN)
+            end
         elseif not store.has(saved.untracked, entry.path) then
             out[#out + 1] = entry
             listed[store.key(entry.path)] = true
@@ -143,10 +153,10 @@ local function exists(entry)
     return stat ~= nil and stat.type == (entry.kind == "file" and "file" or "directory")
 end
 
--- The tracked entries that exist, in order.
-local function tracked_entries()
+-- The tracked entries that exist, in order (quiet as for all_entries).
+local function tracked_entries(quiet)
     local out = {}
-    for _, entry in ipairs(all_entries()) do
+    for _, entry in ipairs(all_entries(quiet)) do
         if exists(entry) then
             out[#out + 1] = entry
         end
@@ -294,6 +304,19 @@ local function entry_items(entries, near)
     return items
 end
 
+-- The name the picker lists the project at dir by, or nil when dir isn't
+-- a tracked project. Real paths are compared, so a symlink on either side
+-- (a config dir linked from dotfiles) still matches.
+function M.name(dir)
+    local real = vim.uv.fs_realpath(dir)
+    if not real then return nil end
+    for _, item in ipairs(build_items(tracked_entries(true))) do
+        if not item.file and vim.uv.fs_realpath(item.path) == real then
+            return item.name
+        end
+    end
+end
+
 -- Make `path` (resolved like a dirs entry) the active project. Every open
 -- buffer is killed so nothing from the old project lingers: modified
 -- buffers backed by a real file are saved first, while scratch, terminal,
@@ -337,12 +360,15 @@ function M.switch(path)
     vim.notify("projects: switched to " .. path)
 end
 
--- Saves doc to the store, as an error message on failure.
+-- Saves doc to the store, as an error message on failure. The statusline
+-- remembers project names, which a change to the tracked set can change
+-- (an untracked Config shows as neo again), so it forgets them.
 local function save(doc)
     local ok, err = store.write(doc)
     if not ok then
         return nil, "couldn't save the tracked set: " .. tostring(err)
     end
+    statusline.forget()
     return true
 end
 
@@ -645,6 +671,7 @@ end
 function M.setup(opts)
     opts = opts or {}
     config.dirs = opts.dirs or override_dirs() or M.default_dirs
+    statusline.set_namer(M.name)
     vim.api.nvim_create_user_command("Projects", function(o) M.command(o.args) end, {
         nargs = "*",
         complete = M.complete,

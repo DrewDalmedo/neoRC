@@ -40,8 +40,10 @@ local function strings(list)
 end
 
 --- The file as { dirs = {...}, untracked = {...} }, fresh lists of paths.
---- A missing file reads as an empty one.
-function M.read()
+--- A missing file reads as an empty one. quiet (for the statusline, which
+--- can't be notifying) reads a broken one as empty too, but leaves it
+--- where it is for a louder read to move aside and report.
+function M.read(quiet)
     local f = io.open(M.file, "rb")
     if not f then
         return { dirs = {}, untracked = {} }
@@ -51,6 +53,9 @@ function M.read()
     local ok, doc = pcall(vim.json.decode, text)
     if ok and type(doc) == "table" then
         return { dirs = strings(doc.dirs), untracked = strings(doc.untracked) }
+    end
+    if quiet then
+        return { dirs = {}, untracked = {} }
     end
     local bad = M.file .. ".bad"
     local moved = vim.uv.fs_rename(M.file, bad)

@@ -170,6 +170,39 @@ eq("scan keeps own names", find(items, "beta") ~= nil, true)
 eq("scan name ignored", find(items, "Ignored"), nil)
 eq("fuzzy matches renamed", fuzzy.filter(items, "blinky!")[1].name, "Blinky!")
 
+-- name(): the name the picker lists the project at a directory by, which
+-- setup() hands to the picker's statusline ("Blinky!: main.c")
+eq("name of a renamed single", projects.name(tmp .. "/Embedded/blinky"), "Blinky!")
+eq("name of a scanned project", projects.name(tmp .. "/Alpha/beta"), "beta")
+eq("name with a trailing slash", projects.name(tmp .. "/Alpha/beta/"), "beta")
+eq("untracked dir has no name", projects.name(tmp .. "/Embedded"), nil)
+eq("file entry is no project dir", projects.name(tmp .. "/notes.md"), nil)
+eq("missing dir has no name", projects.name(tmp .. "/Missing"), nil)
+if link_ok then
+    -- linked into a scanned dir: the link's name, whichever path is asked
+    eq("name through a symlink", projects.name(tmp .. "/linktarget"), "ulink")
+else
+    print("skip name through a symlink (fs_symlink unavailable)")
+end
+local statusline = require("neo.plugins.picker.statusline")
+eq("statusline names tracked projects", statusline.project(tmp .. "/Embedded/blinky"), "Blinky!")
+eq("statusline names the rest by basename", statusline.project(tmp .. "/Embedded"), "Embedded")
+local cwd_before = vim.fn.getcwd()
+vim.cmd("cd " .. vim.fn.fnameescape(tmp .. "/Embedded/blinky"))
+vim.cmd("edit main.c")
+eq("statusline label in a named project", statusline.label(), "Blinky!: main.c")
+vim.cmd("bwipeout")
+vim.cmd("cd " .. vim.fn.fnameescape(cwd_before))
+
+-- the statusline asks name() as it draws: malformed entries are skipped
+-- without a word there (open() and items() still complain)
+notified = nil
+vim.notify = function(msg) notified = msg end
+projects.setup({ dirs = { { single = true }, tmp .. "/Alpha" } })
+eq("name past a malformed entry", projects.name(tmp .. "/Alpha/beta"), "beta")
+eq("name doesn't notify", notified, nil)
+vim.notify = saved_notify
+
 -- setup{dirs} replaces the tracked set outright
 projects.setup({ dirs = { tmp .. "/Embedded" } })
 items = projects.items()
@@ -301,6 +334,15 @@ vim.fn.mkdir(vim.fs.dirname(store.file), "p")
 local f = io.open(store.file, "w")
 f:write("{not json")
 f:close()
+-- the statusline reads quietly: no notice, and the file is left in place
+capture()
+eq("broken store reads empty quietly", #store.read(true).dirs, 0)
+vim.notify = saved_notify
+eq("quiet read says nothing", #notes, 0)
+eq("quiet read leaves the file", vim.uv.fs_stat(store.file) ~= nil, true)
+projects.setup({ dirs = { tmp .. "/Alpha" } })
+eq("name() reads quietly", projects.name(tmp .. "/Alpha/beta"), "beta")
+eq("name() leaves the broken file", vim.uv.fs_stat(store.file .. ".bad"), nil)
 capture()
 eq("broken store reads empty", #store.read().dirs, 0)
 vim.notify = saved_notify
@@ -385,6 +427,18 @@ eq("retrack single", projects.track(tmp .. "/Embedded/blinky"), n(tmp .. "/Embed
 eq("retracked single keeps its tag", find(projects.items(), "blinky").tag, "Pinned")
 eq("retrack file", projects.track(tmp .. "/notes.md"), n(tmp .. "/notes.md"))
 eq("retracked file is a file again", find(projects.items(), "notes.md").file, true)
+
+-- the statusline's remembered project names follow tracking: an
+-- untracked renamed project goes back to its basename, and back again
+local statusline_mod = require("neo.plugins.picker.statusline")
+projects.setup({ dirs = configured_set })
+eq("statusline name before untrack", statusline_mod.project(tmp .. "/Embedded/blinky"), "blinky")
+projects.setup({ dirs = { { tmp .. "/Embedded/blinky", single = true, name = "Blinky!" } } })
+eq("statusline uses the configured name", statusline_mod.project(tmp .. "/Embedded/blinky"), "Blinky!")
+projects.untrack(tmp .. "/Embedded/blinky")
+eq("statusline forgets an untracked name", statusline_mod.project(tmp .. "/Embedded/blinky"), "blinky")
+projects.track(tmp .. "/Embedded/blinky")
+eq("statusline picks a retracked name up", statusline_mod.project(tmp .. "/Embedded/blinky"), "Blinky!")
 
 -- a saved dir the configured set lists too shows once, and untracking it
 -- covers both

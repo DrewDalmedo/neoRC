@@ -49,6 +49,10 @@
 -- Only one picker is open at a time; opening a new one closes the old one.
 -- Keys: <CR> select; <Esc> close (normal mode); <Up>/<Down> move (any mode);
 -- j/k/gg/G move (normal mode); plus whatever opts.keys adds.
+--
+-- M.setup() puts the project in front of the file name on the statusline,
+-- "neo: sub/file.txt" for the sub/file.txt open_file gives a picked file
+-- (see statusline.lua).
 local ui = require("neo.plugins.picker.ui")
 local fuzzy = require("neo.plugins.picker.fuzzy")
 local util = require("neo.plugins.picker.util")
@@ -197,6 +201,10 @@ end
 -- The currently open picker controller, or nil.
 function M.current()
     return active
+end
+
+function M.setup()
+    require("neo.plugins.picker.statusline").setup()
 end
 
 function M.open(opts)

@@ -3,7 +3,8 @@
 -- no filtering, keymaps, or item semantics.
 local M = {}
 
--- Open the two windows and return a handle:
+-- opts: title (on the prompt's border), footer (on the results' bottom
+-- border), width, height. Open the two windows and return a handle:
 --   { prompt_buf, prompt_win, results_buf, results_win }
 -- The prompt window is entered; both buffers are wiped when their windows close.
 function M.create(opts)
@@ -26,11 +27,16 @@ function M.create(opts)
     h.prompt_buf = vim.api.nvim_create_buf(false, true)
     h.prompt_win = vim.api.nvim_open_win(h.prompt_buf, true, prompt_cfg)
 
-    h.results_buf = vim.api.nvim_create_buf(false, true)
-    h.results_win = vim.api.nvim_open_win(h.results_buf, false, vim.tbl_extend("force", base, {
+    local results_cfg = vim.tbl_extend("force", base, {
         row = row + 3, col = col, width = width, height = math.max(5, total_h - 5),
         noautocmd = true, zindex = 51,
-    }))
+    })
+    if opts.footer then
+        results_cfg.footer = opts.footer
+        results_cfg.footer_pos = "right"
+    end
+    h.results_buf = vim.api.nvim_create_buf(false, true)
+    h.results_win = vim.api.nvim_open_win(h.results_buf, false, results_cfg)
 
     vim.api.nvim_set_option_value("filetype", "picker_prompt", { buf = h.prompt_buf })
     vim.api.nvim_set_option_value("filetype", "picker_results", { buf = h.results_buf })

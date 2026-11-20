@@ -24,11 +24,19 @@
 --          ~/Work) and created when it doesn't exist; one with no projects
 --          yet goes straight on to naming its first
 --   <C-x>  untrack an entry of any kind, wherever it was configured (the
---          highlighted project's own is offered first); nothing on disk is
---          touched
--- :Projects new [name], :Projects track [path] and :Projects untrack [path]
--- do the same from the command line. The picker opens even with nothing
--- to list, so these keys are always reachable.
+--          highlighted project's own is offered first), then say whether
+--          to delete it from disk too (No unless you answer Yes)
+--   <C-d>  delete the highlighted project from disk (a file entry's file),
+--          after saying Yes to a question that defaults to No
+-- :Projects new [name], track [path], untrack [path] and delete [path] do
+-- the same from the command line. The picker opens even with nothing to
+-- list, so these keys are always reachable.
+--
+-- Deleting never touches the home directory, a filesystem root, anything
+-- holding one, or anything overlapping Neovim's config; a symlink is
+-- removed itself, never what it points to. A working directory inside
+-- what goes moves to its parent, and buffers of files that went with it
+-- are wiped (the question warns about unsaved changes among them).
 --
 -- The tracked set is decided at setup(), first hit wins:
 --   1. setup({ dirs = ... })
@@ -111,6 +119,25 @@ end
 -- path as shown to you: under the home directory as ~/...
 local function short(path)
     return vim.fn.fnamemodify(path, ":~")
+end
+
+-- Whether path is dir or inside it (both absolute and normalized).
+local function inside(path, dir)
+    path, dir = store.key(path), store.key(dir)
+    if path == dir then return true end
+    local prefix = dir:sub(-1) == "/" and dir or dir .. "/"
+    return path:sub(1, #prefix) == prefix
+end
+
+-- path normalized and, when it differs, resolved too: a symlink along
+-- the way (macOS's /var -> /private/var) mustn't hide an overlap.
+local function forms(path)
+    local out = { vim.fs.normalize(path) }
+    local real = vim.uv.fs_realpath(path)
+    if real and vim.fs.normalize(real) ~= out[1] then
+        out[2] = vim.fs.normalize(real)
+    end
+    return out
 end
 
 -- Every tracked entry, whether or not it exists: the configured ones
@@ -459,6 +486,188 @@ function M.create_project(parent, name)
     return path
 end
 
+--- Why path mustn't be deleted, or nil when it may be. Kept: the home
+--- directory, a filesystem root, anything holding either, and anything
+--- overlapping Neovim's config (the running config included). Deleting a
+--- symlink removes only the link, so only its own path counts.
+function M.protected(path)
+    path = vim.fs.normalize(path)
+    local stat = vim.uv.fs_lstat(path)
+    local mine = (stat and stat.type == "link") and { path } or forms(path)
+    for _, p in ipairs(mine) do
+        local parent = vim.fs.dirname(p)
+        if parent == nil or parent == p or p:match("^%a:/?$") then
+            return "it's a filesystem root"
+        end
+        for _, home in ipairs(forms(vim.uv.os_homedir())) do
+            if inside(home, p) then
+                return "it holds your home directory"
+            end
+        end
+        for _, config in ipairs(forms(vim.fn.stdpath("config"))) do
+            if inside(config, p) then
+                return "it holds your Neovim config"
+            end
+            if inside(p, config) then
+                return "it's part of your Neovim config"
+            end
+        end
+    end
+end
+
+-- The paths buffers going with path are named under: a link's own, or
+-- the directory's (in both forms).
+local function buffer_roots(path, stat)
+    return stat.type == "link" and { vim.fs.normalize(path) } or forms(path)
+end
+
+local function under(name, roots)
+    name = vim.fs.normalize(name)
+    for _, root in ipairs(roots) do
+        if inside(name, root) then return true end
+    end
+    return false
+end
+
+-- How many listed buffers with unsaved changes are of files under path.
+local function unsaved_under(path)
+    local stat = vim.uv.fs_lstat(path)
+    if not stat then return 0 end
+    local roots, count = buffer_roots(path, stat), 0
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        local name = vim.api.nvim_buf_get_name(buf)
+        if vim.bo[buf].modified and vim.bo[buf].buftype == "" and name ~= ""
+            and under(name, roots) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+--- Delete path (resolved like a dirs entry) from disk: a directory with
+--- everything in it, a file, or a symlink (the link, never what it points
+--- to). Refuses whatever M.protected keeps. A working directory inside it
+--- moves to its parent first, and buffers whose files went with it are
+--- wiped, unsaved changes and all. Returns true, or nil and an error.
+function M.delete(path)
+    path = M.resolve(vim.trim(path))
+    local stat = vim.uv.fs_lstat(path)
+    if not stat then
+        return nil, "nothing to delete at " .. short(path)
+    end
+    local why = M.protected(path)
+    if why then
+        return nil, ("won't delete %s: %s"):format(short(path), why)
+    end
+    local roots = buffer_roots(path, stat)
+    -- off it first: Windows can't delete a directory that is in use
+    if under(vim.fn.getcwd(-1, -1), roots) then
+        vim.cmd("cd " .. vim.fn.fnameescape(vim.fs.dirname(path)))
+    end
+    local failed = vim.fn.delete(path, stat.type == "directory" and "rf" or "") ~= 0
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+        local name = vim.api.nvim_buf_get_name(buf)
+        if name ~= "" and under(name, roots) and not vim.uv.fs_lstat(name) then
+            pcall(vim.api.nvim_buf_delete, buf, { force = true })
+        end
+    end
+    if failed or vim.uv.fs_lstat(path) then
+        return nil, "couldn't delete all of " .. short(path)
+    end
+    return true
+end
+
+-- A yes/no question that defaults to No; true only for Yes. The redraw
+-- clears the question away, so the message that follows doesn't stack
+-- under it into a "Press ENTER" prompt.
+local function ask(question)
+    local yes = vim.fn.confirm(question, "&Yes\n&No", 2) == 1
+    vim.cmd("redraw")
+    return yes
+end
+
+-- What deleting path takes with it, for a question: projects is how many
+-- projects a tracked directory holds.
+local function doomed(path, projects)
+    local stat = vim.uv.fs_lstat(path)
+    local what
+    if stat.type == "link" then
+        what = ("the link %s (what it points to is kept)"):format(short(path))
+    elseif stat.type ~= "directory" then
+        what = "the file " .. short(path)
+    else
+        what = short(path) .. " and everything in it"
+        if projects and projects > 0 then
+            what = what .. (" (%d project%s)"):format(projects, projects == 1 and "" or "s")
+        end
+    end
+    return what
+end
+
+-- A line for the end of a question about deleting path, warning about
+-- unsaved changes that would go with it; "" when there are none.
+local function unsaved_note(path)
+    local unsaved = unsaved_under(path)
+    if unsaved == 0 then return "" end
+    return ("\n%d open buffer%s with unsaved changes would go too.")
+        :format(unsaved, unsaved == 1 and "" or "s")
+end
+
+--- Delete a project from disk once you say Yes: opts.item (a picker item)
+--- or the one at opts.path (any project the picker lists, a file entry's
+--- file included), else one chosen from a picker. opts.back runs after a
+--- deletion, when given.
+function M.delete_prompt(opts)
+    opts = opts or {}
+    local function go(item)
+        local why = M.protected(item.path)
+        if why then
+            vim.notify(("projects: won't delete %s: %s"):format(short(item.path), why),
+                vim.log.levels.WARN)
+            return
+        end
+        if not vim.uv.fs_lstat(item.path) then
+            vim.notify("projects: nothing to delete at " .. short(item.path), vim.log.levels.WARN)
+            return
+        end
+        if not ask("Delete " .. doomed(item.path) .. "?" .. unsaved_note(item.path)) then return end
+        local ok, err = M.delete(item.path)
+        if not ok then
+            vim.notify("projects: " .. err, vim.log.levels.ERROR)
+            return
+        end
+        vim.notify("projects: deleted " .. short(item.path))
+        if opts.back then opts.back() end
+    end
+    if opts.item then
+        return go(opts.item)
+    end
+    local items = M.items()
+    if opts.path and vim.trim(opts.path) ~= "" then
+        local key = store.key(M.resolve(vim.trim(opts.path)))
+        for _, item in ipairs(items) do
+            if store.key(vim.fs.normalize(item.path)) == key then
+                return go(item)
+            end
+        end
+        vim.notify(("projects: not a project: %s (untracking a tracked directory"
+            .. " offers to delete it)"):format(short(M.resolve(vim.trim(opts.path)))),
+            vim.log.levels.WARN)
+        return
+    end
+    if #items == 0 then
+        vim.notify("projects: no projects to delete", vim.log.levels.WARN)
+        return
+    end
+    return picker.open({
+        title = " Delete project ",
+        items = items,
+        on_select = function(item)
+            vim.schedule(function() go(item) end)
+        end,
+    })
+end
+
 -- Directory completion for prompts, as a vim.ui.input completion spec.
 local COMPLETE_DIR = "customlist,v:lua.require'neo.plugins.projects'.complete_dir"
 
@@ -555,17 +764,33 @@ function M.track_prompt(opts)
 end
 
 --- Untrack an entry, asking which unless opts.path names it (opts.near is
---- the entry to offer first). opts.back runs afterwards, when given.
+--- the entry to offer first), then whether to delete it from disk too,
+--- unless it's gone already or M.protected keeps it. opts.back runs
+--- afterwards, when given.
 function M.untrack_prompt(opts)
     opts = opts or {}
     local function go(path)
+        path = M.resolve(vim.trim(path))
+        local entry = find_entry(all_entries(), path)
         local ok, err = M.untrack(path)
         if not ok then
             vim.notify("projects: " .. err, vim.log.levels.WARN)
             return
         end
-        vim.notify(("projects: untracked %s (nothing on disk was touched)")
-            :format(short(M.resolve(vim.trim(path)))))
+        local projects = entry and entry.kind == "scan" and #project_names(path) or nil
+        if vim.uv.fs_lstat(path) and not M.protected(path)
+            and ask(("Untracked %s. Delete %s too?%s")
+                :format(short(path), doomed(path, projects), unsaved_note(path))) then
+            local deleted, derr = M.delete(path)
+            if deleted then
+                vim.notify(("projects: untracked and deleted %s"):format(short(path)))
+            else
+                vim.notify(("projects: untracked %s, but %s"):format(short(path), derr),
+                    vim.log.levels.ERROR)
+            end
+        else
+            vim.notify(("projects: untracked %s (left on disk)"):format(short(path)))
+        end
         if opts.back then opts.back() end
     end
     if opts.path and vim.trim(opts.path) ~= "" then
@@ -585,7 +810,7 @@ function M.untrack_prompt(opts)
     })
 end
 
-local KEYS_HINT = " <C-n> new · <C-t> track · <C-x> untrack "
+local KEYS_HINT = " <C-n> new · <C-t> track · <C-x> untrack · <C-d> delete "
 
 function M.open()
     local function reopen() M.open() end
@@ -621,14 +846,20 @@ function M.open()
                     M.untrack_prompt({ near = sel and sel.entry, back = reopen })
                 end)
             end,
+            ["<C-d>"] = function(p)
+                local sel = p:selection()
+                if not sel then return end
+                p:close()
+                vim.schedule(function() M.delete_prompt({ item = sel, back = reopen }) end)
+            end,
         },
     })
 end
 
-local SUBCOMMANDS = { "new", "track", "untrack" }
+local SUBCOMMANDS = { "new", "track", "untrack", "delete" }
 
---- :Projects completion: the subcommand, then a directory for track or a
---- tracked path for untrack.
+--- :Projects completion: the subcommand, then a directory for track, a
+--- tracked path for untrack, or a project's path for delete.
 function M.complete(lead, line, pos)
     local words = vim.split(line:sub(1, pos):gsub("^%s+", ""), "%s+")
     if #words <= 2 then
@@ -647,10 +878,20 @@ function M.complete(lead, line, pos)
         end
         return out
     end
+    if words[2] == "delete" then
+        local out = {}
+        for _, item in ipairs(M.items()) do
+            local path = short(item.path)
+            if vim.startswith(path, lead) then
+                out[#out + 1] = path
+            end
+        end
+        return out
+    end
     return {}
 end
 
---- :Projects [new [name] | track [path] | untrack [path]]
+--- :Projects [new [name] | track [path] | untrack [path] | delete [path]]
 function M.command(args)
     local sub, rest = args:match("^%s*(%S*)%s*(.-)%s*$")
     if sub == "" then
@@ -661,8 +902,10 @@ function M.command(args)
         return M.track_prompt({ path = rest })
     elseif sub == "untrack" then
         return M.untrack_prompt({ path = rest })
+    elseif sub == "delete" then
+        return M.delete_prompt({ path = rest })
     end
-    vim.notify(("projects: unknown subcommand %s (new, track or untrack)"):format(sub),
+    vim.notify(("projects: unknown subcommand %s (new, track, untrack or delete)"):format(sub),
         vim.log.levels.ERROR)
 end
 
@@ -675,7 +918,7 @@ function M.setup(opts)
     vim.api.nvim_create_user_command("Projects", function(o) M.command(o.args) end, {
         nargs = "*",
         complete = M.complete,
-        desc = "Projects: select, create, track or untrack",
+        desc = "Projects: select, create, track, untrack or delete",
     })
 end
 

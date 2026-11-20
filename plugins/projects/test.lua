@@ -483,6 +483,13 @@ end
 local function interact(list)
     switched, prompts, answers = nil, {}, list
 end
+-- yes/no questions: recorded, answered with confirm_answer (2 is No)
+local questions, confirm_answer = {}, 2
+vim.fn.confirm = function(msg, _, default)
+    questions[#questions + 1] = { msg = msg, default = default }
+    return confirm_answer
+end
+local function last_question() return questions[#questions] and questions[#questions].msg or "" end
 
 -- new_project with one directory that can hold projects: no chooser,
 -- straight to the name, then into the new project
@@ -602,7 +609,7 @@ projects.setup({ dirs = { tmp .. "/Alpha", tmp .. "/Embedded" } })
 p = projects.open()
 local footer = vim.api.nvim_win_get_config(p.ui.results_win).footer
 footer = type(footer) == "table" and footer[1][1] or footer
-for _, lhs in ipairs({ "<C-n>", "<C-t>", "<C-x>" }) do
+for _, lhs in ipairs({ "<C-n>", "<C-t>", "<C-x>", "<C-d>" }) do
     eq("picker maps " .. lhs, vim.fn.maparg(lhs, "i", false, true).buffer, 1)
     eq("picker footer shows " .. lhs, footer:find(lhs, 1, true) ~= nil, true)
 end
@@ -650,7 +657,7 @@ eq("<C-x> untracked dir unlisted", p and find(p.items, "led"), nil)
 p:close()
 
 -- :Projects subcommands and their completion
-eq("complete subcommands", table.concat(vim.fn.getcompletion("Projects ", "cmdline"), ","), "new,track,untrack")
+eq("complete subcommands", table.concat(vim.fn.getcompletion("Projects ", "cmdline"), ","), "new,track,untrack,delete")
 eq("complete subcommand prefix", table.concat(vim.fn.getcompletion("Projects un", "cmdline"), ","), "untrack")
 eq("complete untrack paths", vim.tbl_contains(vim.fn.getcompletion("Projects untrack ", "cmdline"),
     vim.fn.fnamemodify(n(tmp .. "/Alpha"), ":~")), true)
@@ -675,7 +682,193 @@ vim.cmd("Projects bogus")
 vim.notify = saved_notify
 eq(":Projects unknown subcommand", noted("unknown subcommand"), true)
 
+-- protected(): never the home directory, a root, what holds either, or
+-- anything overlapping Neovim's config. HOME and the config dir are
+-- pointed into the fixture, so a broken guard could only cost the fixture.
+local function real(path) return n(vim.uv.fs_realpath(path) or path) end
+local saved_home_env = vim.env.HOME
+vim.fn.mkdir(tmp .. "/fakehome/code", "p")
+vim.env.HOME = tmp .. "/fakehome"
+eq("home is protected", projects.protected(tmp .. "/fakehome") ~= nil, true)
+eq("what holds home is protected", projects.protected(tmp) ~= nil, true)
+eq("a root is protected", projects.protected("/") ~= nil, true)
+eq("inside home is not", projects.protected(tmp .. "/fakehome/code"), nil)
+vim.env.HOME = saved_home_env
+local real_stdpath = vim.fn.stdpath
+local fake_config = tmp .. "/fakecfg"
+vim.fn.mkdir(fake_config .. "/lua/neo", "p")
+vim.fn.stdpath = function(what)
+    if what == "config" then return fake_config end
+    return real_stdpath(what)
+end
+eq("the config is protected", projects.protected(fake_config) ~= nil, true)
+eq("inside the config is protected", (projects.protected(fake_config .. "/lua/neo") or ""):find("part of") ~= nil, true)
+eq("what holds the config is protected", (projects.protected(tmp) or ""):find("holds") ~= nil, true)
+eq("beside the config is not", projects.protected(tmp .. "/Alpha"), nil)
+local _, refused = projects.delete(fake_config .. "/lua/neo")
+eq("delete refuses the protected", refused and refused:find("won't delete", 1, true) ~= nil, true)
+eq("refused delete touches nothing", vim.fn.isdirectory(fake_config .. "/lua/neo"), 1)
+vim.fn.stdpath = nil
+
+-- delete(): a directory with everything in it, a file, a link (never
+-- what it points to)
+vim.fn.mkdir(tmp .. "/Alpha/doomed/sub", "p")
+vim.fn.writefile({ "x" }, tmp .. "/Alpha/doomed/sub/f.txt")
+eq("delete a directory", projects.delete(tmp .. "/Alpha/doomed"), true)
+eq("directory gone", vim.uv.fs_lstat(tmp .. "/Alpha/doomed"), nil)
+vim.fn.writefile({ "x" }, tmp .. "/Alpha/loose.txt")
+eq("delete a file", projects.delete(tmp .. "/Alpha/loose.txt"), true)
+eq("file gone", vim.fn.filereadable(tmp .. "/Alpha/loose.txt"), 0)
+vim.fn.writefile({ "keep" }, tmp .. "/linktarget/keep.txt")
+if vim.uv.fs_symlink(tmp .. "/linktarget", tmp .. "/Alpha/dlink", { dir = true }) then
+    eq("delete a link", projects.delete(tmp .. "/Alpha/dlink"), true)
+    eq("link gone", vim.uv.fs_lstat(tmp .. "/Alpha/dlink"), nil)
+    eq("what it pointed to kept", vim.fn.filereadable(tmp .. "/linktarget/keep.txt"), 1)
+else
+    print("skip delete a link (fs_symlink unavailable)")
+end
+_, err = projects.delete(tmp .. "/Alpha/nothing-here")
+eq("delete nothing refused", err and err:find("nothing to delete") ~= nil, true)
+
+-- buffers of files that went are wiped, modified or not; the rest stay;
+-- a working directory inside moves to the parent
+vim.fn.mkdir(tmp .. "/Alpha/busy", "p")
+vim.fn.writefile({ "a" }, tmp .. "/Alpha/busy/a.txt")
+local cwd_saved = vim.fn.getcwd()
+vim.cmd("cd " .. vim.fn.fnameescape(tmp .. "/Alpha/busy"))
+vim.cmd("edit a.txt")
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "unsaved" })
+local busy_buf = vim.api.nvim_get_current_buf()
+vim.cmd("edit " .. vim.fn.fnameescape(tmp .. "/Alpha/notes.txt"))
+local kept_buf = vim.api.nvim_get_current_buf()
+eq("delete the working directory", projects.delete(tmp .. "/Alpha/busy"), true)
+eq("its buffers wiped", vim.api.nvim_buf_is_valid(busy_buf), false)
+eq("other buffers kept", vim.api.nvim_buf_is_valid(kept_buf), true)
+eq("working directory moved to the parent", real(vim.fn.getcwd()), real(tmp .. "/Alpha"))
+vim.cmd("cd " .. vim.fn.fnameescape(cwd_saved))
+vim.cmd("silent! %bwipeout!")
+
+-- <C-d> in the picker: the highlighted project, a question that defaults
+-- to No, then back to the picker
+reset_store()
+projects.setup({ dirs = { tmp .. "/Alpha", { tmp .. "/notes.md", file = true } } })
+vim.fn.mkdir(tmp .. "/Alpha/victim", "p")
+questions, confirm_answer = {}, 2
+p = projects.open()
+vim.api.nvim_buf_set_lines(p.ui.prompt_buf, 0, -1, false, { "victim" })
+p:refresh()
+vim.fn.maparg("<C-d>", "i", false, true).callback()
+drain()
+eq("<C-d> asks", last_question():find("victim and everything in it", 1, true) ~= nil, true)
+eq("<C-d> defaults to No", questions[1] and questions[1].default, 2)
+eq("No keeps it", vim.fn.isdirectory(tmp .. "/Alpha/victim"), 1)
+eq("No stays out of the picker", picker.current(), nil)
+confirm_answer = 1
+p = projects.open()
+vim.api.nvim_buf_set_lines(p.ui.prompt_buf, 0, -1, false, { "victim" })
+p:refresh()
+capture()
+vim.fn.maparg("<C-d>", "i", false, true).callback()
+drain()
+vim.notify = saved_notify
+eq("Yes deletes", vim.fn.isdirectory(tmp .. "/Alpha/victim"), 0)
+eq("deleting reports", noted("deleted"), true)
+p = picker.current()
+eq("deleting goes back to the picker", p ~= nil and p:valid(), true)
+eq("deleted project unlisted", p and find(p.items, "victim"), nil)
+p:close()
+
+-- with nothing highlighted, <C-d> does nothing
+p = projects.open()
+vim.api.nvim_buf_set_lines(p.ui.prompt_buf, 0, -1, false, { "zzzqqqxxx" })
+p:refresh()
+local asked_before = #questions
+vim.fn.maparg("<C-d>", "i", false, true).callback()
+drain()
+eq("<C-d> on nothing keeps the picker", p:valid(), true)
+eq("<C-d> on nothing asks nothing", #questions, asked_before)
+p:close()
+
+-- :Projects delete <path>: the question names the file of a file entry,
+-- and warns about unsaved changes that would go
+confirm_answer = 2
+vim.cmd("Projects delete " .. vim.fn.fnameescape(tmp .. "/notes.md"))
+eq("file entry question", last_question():find("the file", 1, true) ~= nil, true)
+eq("file entry kept on No", vim.fn.filereadable(tmp .. "/notes.md"), 1)
+vim.fn.mkdir(tmp .. "/Alpha/withbuf", "p")
+vim.cmd("edit " .. vim.fn.fnameescape(tmp .. "/Alpha/withbuf/x.txt"))
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "unsaved" })
+confirm_answer = 1
+vim.cmd("Projects delete " .. vim.fn.fnameescape(tmp .. "/Alpha/withbuf"))
+eq("question warns about unsaved changes", last_question():find("?\n1 open buffer with unsaved changes would go too.", 1, true) ~= nil, true)
+eq(":Projects delete", vim.fn.isdirectory(tmp .. "/Alpha/withbuf"), 0)
+vim.cmd("silent! %bwipeout!")
+eq("complete delete paths", vim.tbl_contains(vim.fn.getcompletion("Projects delete ", "cmdline"),
+    vim.fn.fnamemodify(n(tmp .. "/Alpha/beta"), ":~")), true)
+
+-- only listed projects: a tracked directory itself is refused (untracking
+-- offers that), and so is anything protected, without a question
+asked_before = #questions
+capture()
+vim.cmd("Projects delete " .. vim.fn.fnameescape(tmp .. "/Alpha"))
+eq("tracked dir isn't a project", noted("not a project"), true)
+eq("tracked dir kept", vim.fn.isdirectory(tmp .. "/Alpha"), 1)
+vim.fn.stdpath = function(what)
+    if what == "config" then return tmp .. "/Alpha/gamma" end
+    return real_stdpath(what)
+end
+projects.delete_prompt({ path = tmp .. "/Alpha/gamma" })
+vim.fn.stdpath = nil
+vim.notify = saved_notify
+eq("protected project refused", noted("won't delete"), true)
+eq("refusals ask nothing", #questions, asked_before)
+eq("protected project kept", vim.fn.isdirectory(tmp .. "/Alpha/gamma"), 1)
+
+-- untracking then asks whether to delete it too: No leaves it on disk,
+-- Yes deletes it; the question counts a tracked directory's projects
+reset_store()
+projects.setup({ dirs = { tmp .. "/Alpha" } })
+vim.fn.mkdir(tmp .. "/Spare/p1", "p")
+vim.fn.mkdir(tmp .. "/Spare/p2", "p")
+projects.track(tmp .. "/Spare")
+confirm_answer = 2
+capture()
+projects.untrack_prompt({ path = tmp .. "/Spare" })
+vim.notify = saved_notify
+eq("untrack asks to delete", last_question():find("Untracked", 1, true) ~= nil, true)
+eq("untrack question counts projects", last_question():find("(2 projects)", 1, true) ~= nil, true)
+eq("untrack No leaves it on disk", vim.fn.isdirectory(tmp .. "/Spare/p1"), 1)
+eq("untrack No still untracks", find(projects.items(), "p1"), nil)
+eq("untrack No reports", noted("left on disk"), true)
+projects.track(tmp .. "/Spare")
+confirm_answer = 1
+back = 0
+capture()
+projects.untrack_prompt({ path = tmp .. "/Spare", back = go_back })
+vim.notify = saved_notify
+eq("untrack Yes deletes", vim.uv.fs_lstat(tmp .. "/Spare"), nil)
+eq("untrack Yes reports", noted("untracked and deleted"), true)
+eq("untrack Yes goes back", back, 1)
+
+-- nothing to ask about a missing entry or a protected one
+projects.setup({ dirs = { tmp .. "/Alpha", tmp .. "/Missing", { fake_config, single = true } } })
+asked_before = #questions
+capture()
+projects.untrack_prompt({ path = tmp .. "/Missing" })
+vim.fn.stdpath = function(what)
+    if what == "config" then return fake_config end
+    return real_stdpath(what)
+end
+projects.untrack_prompt({ path = fake_config })
+vim.fn.stdpath = nil
+vim.notify = saved_notify
+eq("missing or protected: no question", #questions, asked_before)
+eq("protected untracked anyway", find(projects.items(), "fakecfg"), nil)
+eq("protected left on disk", vim.fn.isdirectory(fake_config .. "/lua/neo"), 1)
+confirm_answer = 2
+
 projects.switch, vim.ui.input = saved_switch, saved_input
+vim.fn.confirm = nil
 reset_store()
 
 -- switch() kills every open buffer (saving the file-backed modified ones),

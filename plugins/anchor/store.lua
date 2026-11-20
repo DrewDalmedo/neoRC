@@ -9,12 +9,13 @@
 -- slot holds a path relative to the root when the file is inside it, else
 -- an absolute one; "" is an empty slot, and a list never ends in one.
 --
--- Nothing is cached: every call reads the file afresh, and set() rewrites
--- only the one project it is given, so two Neovims never undo each other's
--- other projects (on the same project, the last write wins). Writes go to
--- a temporary file renamed over the real one, so a crash can't leave half
--- a file. A file that doesn't parse is moved aside to <file>.bad rather
--- than overwritten.
+-- Every call reads the file afresh (but peek(), for the statusline, which
+-- reads it again only once it has changed), and set() rewrites only the
+-- one project it is given, so two Neovims never undo each other's other
+-- projects (on the same project, the last write wins). Writes go to a
+-- temporary file renamed over the real one, so a crash can't leave half a
+-- file. A file that doesn't parse is moved aside to <file>.bad rather than
+-- overwritten.
 
 local M = {}
 
@@ -94,8 +95,10 @@ local function empty()
 end
 
 --- The decoded file: { version, projects = { [root] = slots } }. A
---- missing file reads as an empty one.
-function M.read()
+--- missing file reads as an empty one. quiet (for the statusline, which
+--- can't be notifying) reads a broken one as empty too, but leaves it
+--- where it is for a louder read to move aside and report.
+function M.read(quiet)
     local f = io.open(M.file, "rb")
     if not f then
         return empty()
@@ -106,11 +109,37 @@ function M.read()
     if ok and type(doc) == "table" and type(doc.projects) == "table" then
         return doc
     end
+    if quiet then
+        return empty()
+    end
     local bad = M.file .. ".bad"
     local moved = vim.uv.fs_rename(M.file, bad)
     vim.notify(("anchor: %s isn't valid anchor data; %s"):format(
         M.file, moved and ("moved it to " .. bad) or "couldn't move it aside"), vim.log.levels.ERROR)
     return empty()
+end
+
+-- The last peek: { file, stat, doc }, stat false for a missing file.
+local peeked = nil
+
+local function unchanged(a, b)
+    if not a or not b then
+        return a == b
+    end
+    return a.ino == b.ino and a.size == b.size
+        and a.mtime.sec == b.mtime.sec and a.mtime.nsec == b.mtime.nsec
+end
+
+--- read(true), for the statusline, which is drawn on every cursor move:
+--- the file is read again only when it has changed since the last peek.
+--- set() renames a new file over the old one, so every save, from any
+--- Neovim, gives it a new inode. The result is shared: don't change it.
+function M.peek()
+    local stat = vim.uv.fs_stat(M.file) or false
+    if not (peeked and peeked.file == M.file and unchanged(peeked.stat, stat)) then
+        peeked = { file = M.file, stat = stat, doc = M.read(true) }
+    end
+    return peeked.doc
 end
 
 --- root's slots, as a fresh list ("" is an empty slot). doc is a read()
@@ -160,6 +189,7 @@ function M.set(root, slots)
         -- encode as {} rather than []
         doc.projects = vim.empty_dict()
     end
+    peeked = nil
     return write(doc)
 end
 

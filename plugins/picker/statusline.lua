@@ -12,6 +12,15 @@
 -- isn't a file inside a project (files elsewhere, help, terminals, netrw,
 -- [No Name]) shows the way %f shows it.
 --
+-- A file anchored in the window's project shows its slot first, as the key
+-- that opens it, or its number for a slot without one,
+--
+--   [T] neo: sub/file.txt
+--
+-- (and "[T] " goes in front of %f's name for one outside the project).
+-- The anchor plugin registers the slotter that knows the slots, as the
+-- projects plugin registers the namer.
+--
 -- setup() puts M.file() where 'statusline' has %f (Neovim's default
 -- statusline when none is set) and keeps the rest of it as it was.
 local M = {}
@@ -22,6 +31,7 @@ local ITEM = "%{%v:lua.require('neo.plugins.picker.statusline').file()%}"
 local BUILTIN = "%<%f %h%w%m%r%=%-14.(%l,%c%V%) %P"
 
 local namer = nil
+local slotter = nil
 -- Project names by working directory: the namer can walk the tracked
 -- directories, and the statusline is drawn on every cursor move. "" marks
 -- a directory that isn't a project.
@@ -36,6 +46,15 @@ end
 function M.set_namer(fn)
     namer = fn
     names = {}
+end
+
+-- fn(path, dir) gets a buffer's file (absolute) and a window's working
+-- directory, and returns what to show for the file's slot in that project
+-- (a number, or text such as the key that opens it), or nil when it has
+-- none. It is asked on every redraw of every statusline, so it has to be
+-- cheap.
+function M.set_slotter(fn)
+    slotter = fn
 end
 
 -- Drop the remembered names, for when the namer's answers change (the
@@ -96,12 +115,39 @@ function M.label(buf)
     return project and (project .. ": " .. rel) or nil
 end
 
+-- The slot of buffer buf (default: the current one) in the current
+-- window's project, as text to show ("T", "2"), or nil when it has none
+-- or isn't a file.
+function M.slot(buf)
+    buf = buf or 0
+    if not slotter or vim.bo[buf].buftype ~= "" then return nil end
+    local name = vim.api.nvim_buf_get_name(buf)
+    if name == "" then return nil end
+    local ok, slot = pcall(slotter, name, vim.fn.getcwd(0))
+    if not ok then return nil end
+    if type(slot) == "number" and slot >= 1 and slot % 1 == 0 then
+        return ("%d"):format(slot)
+    end
+    if type(slot) == "string" and slot ~= "" then
+        return slot
+    end
+    return nil
+end
+
+-- text as statusline text: its %s are literal
+local function escape(text)
+    return (text:gsub("%%", "%%%%"))
+end
+
 -- The statusline item: %{%...%} evaluates it in the window whose statusline
 -- is being drawn, and reads the result as statusline text.
 function M.file()
-    local ok, label = pcall(M.label)
-    if not ok or not label then return "%f" end
-    return (label:gsub("%%", "%%%%"))
+    local ok, slot = pcall(M.slot)
+    local prefix = ok and slot and ("[" .. slot .. "] ") or ""
+    local label
+    ok, label = pcall(M.label)
+    if not ok or not label then return escape(prefix) .. "%f" end
+    return escape(prefix .. label)
 end
 
 -- Put M.file() in place of %f in the global 'statusline'. A statusline

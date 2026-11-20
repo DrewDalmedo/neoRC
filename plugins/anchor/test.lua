@@ -380,6 +380,117 @@ feed("q")
 same("empty menu", anchor.list(), {})
 eq("empty menu drops the project", vim.json.decode(read_text(data)).projects[R], nil)
 
+-- the statusline: an anchored file's slot goes in front of its name, by
+-- each window's own project
+local statusline = require("neo.plugins.picker.statusline")
+local saved_statusline = vim.go.statusline
+statusline.setup()
+local function shown(winid)
+    return vim.api.nvim_eval_statusline(vim.go.statusline,
+        { winid = winid or vim.api.nvim_get_current_win() }).str
+end
+local function starts(desc, text, winid)
+    local got = shown(winid)
+    if got:sub(1, #text) == text then
+        eq(desc, true, true)
+    else
+        eq(desc, got, text .. "...")
+    end
+end
+store.set(R, { "a.txt", "", O })
+eq("slot of a file", anchor.slot(R .. "/a.txt"), 1)
+eq("slot of a file outside the project", anchor.slot(O), 3)
+eq("slot of a file in no slot", anchor.slot(R .. "/b.txt"), nil)
+eq("slot in another project", anchor.slot(O, other), 1)
+edit(proj .. "/a.txt")
+starts("statusline shows the slot", "[1] proj: a.txt ")
+edit(other .. "/o.txt")
+eq("statusline slot outside the project", shown():match("^%[3%] .*o%.txt ") ~= nil, true)
+edit(proj .. "/b.txt")
+starts("statusline without a slot", "proj: b.txt ")
+
+-- add, remove and the menu show at once
+anchor.add()
+starts("statusline after add", "[2] proj: b.txt ")
+anchor.remove()
+starts("statusline after remove", "proj: b.txt ")
+buf, win = anchor.menu()
+vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "b.txt", "a.txt" })
+feed("q")
+starts("statusline after the menu", "[1] proj: b.txt ")
+
+-- a window with its own working directory goes by that project's list
+local first = vim.api.nvim_get_current_win()
+vim.cmd("split")
+vim.cmd("lcd " .. vim.fn.fnameescape(other))
+edit(other .. "/o.txt")
+starts("lcd: that project's slot", "[1] other: o.txt ")
+edit(proj .. "/b.txt")
+eq("lcd: no slot there", shown():match("^%[") , nil)
+starts("lcd: the other window keeps its own", "[1] proj: b.txt ", first)
+vim.cmd("close")
+
+-- another Neovim's save shows, and the list isn't read again until then
+local doc2 = vim.json.decode(read_text(data))
+doc2.projects[R] = { "a.txt", "", "b.txt" }
+write(data .. ".other", { vim.json.encode(doc2) })
+vim.uv.fs_rename(data .. ".other", data)
+local reads, real_read = 0, store.read
+store.read = function(...)
+    reads = reads + 1
+    return real_read(...)
+end
+starts("another Neovim's save shows", "[3] proj: b.txt ")
+eq("another Neovim's save read once", reads, 1)
+for _ = 1, 5 do shown() end
+anchor.slot(R .. "/a.txt")
+eq("unchanged list not read again", reads, 1)
+store.read = real_read
+
+-- a broken file reads as no slots, quietly, and stays for :Anchor to report
+local good = read_text(data)
+write(data, { "not json {" })
+notes = {}
+starts("broken file: no slot", "proj: b.txt ")
+eq("broken file: nothing reported", #notes, 0)
+eq("broken file: left in place", read_text(data), "not json {\n")
+write(data, { good })
+starts("fixed file: the slot again", "[3] proj: b.txt ")
+
+-- map(): the keys open their slots, and the statusline shows a file's key
+-- while it still opens the slot here; past the keys, or with the key
+-- taken over, the number
+store.set(R, { "a.txt", "b.txt", "sub/c.txt" })
+anchor.map({ "<C-p>", "<C-t>" })
+eq("map maps the key", vim.fn.maparg("<C-t>", "n", false, true).desc, "Anchor: Go to Slot 2")
+edit(proj .. "/a.txt")
+feed("<C-t>")
+eq("the key opens its slot", current_file(), R .. "/b.txt")
+starts("statusline shows a Ctrl key by its letter", "[T] proj: b.txt ")
+eq("slot_label is the key", anchor.slot_label(R .. "/a.txt", proj), "P")
+eq("slot_label of a slot without a key", anchor.slot_label(R .. "/sub/c.txt", proj), "3")
+eq("slot_label of no slot", anchor.slot_label(R .. "/long.txt", proj), nil)
+edit(proj .. "/sub/c.txt")
+starts("statusline: a slot without a key", "[3] proj: sub/c.txt ")
+edit(proj .. "/b.txt")
+vim.keymap.set("n", "<C-t>", "<Nop>", { buffer = 0 })
+starts("statusline: a key taken over in the buffer", "[2] proj: b.txt ")
+vim.keymap.del("n", "<C-t>", { buffer = 0 })
+starts("statusline: the key back", "[T] proj: b.txt ")
+vim.keymap.set("n", "<C-t>", "<Nop>")
+starts("statusline: a key mapped to something else", "[2] proj: b.txt ")
+anchor.map({ "<leader>1", "<M-t>", "<c-s>" })
+edit(proj .. "/a.txt")
+starts("statusline: a key that isn't a lone <...>", "[<leader>1] proj: a.txt ")
+edit(proj .. "/b.txt")
+starts("statusline: another lone <...> key", "[M-t] proj: b.txt ")
+edit(proj .. "/sub/c.txt")
+starts("statusline: a Ctrl key written in lowercase", "[S] proj: sub/c.txt ")
+for _, lhs in ipairs({ "<leader>1", "<M-t>", "<C-s>", "<C-p>", "<C-t>" }) do
+    vim.keymap.del("n", lhs)
+end
+vim.go.statusline = saved_statusline
+
 vim.notify = saved_notify
 vim.cmd("cd " .. vim.fn.fnameescape(orig_cwd))
 vim.fn.delete(tmp, "rf")

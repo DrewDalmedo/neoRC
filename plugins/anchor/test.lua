@@ -363,7 +363,7 @@ drain()
 eq("closed from elsewhere", menu.current(), nil)
 eq("closed from elsewhere wipes it", vim.api.nvim_buf_is_valid(buf), false)
 
--- <leader>N inside the menu: it saves and leaves first, so the file
+-- a slot key inside the menu: it saves and leaves first, so the file
 -- opens in the window it came from with the edited list
 edit(proj .. "/a.txt")
 buf, win = anchor.menu()

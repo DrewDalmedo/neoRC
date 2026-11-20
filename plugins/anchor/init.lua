@@ -15,8 +15,8 @@
 --             numbers
 --   menu      edit the list (below)
 --   {N}       open the file in slot N in the current window
--- keybinds/anchor.lua maps <leader>a (add), <leader>m (menu) and
--- <leader>1 to <leader>4 (slots 1 to 4).
+-- keybinds/anchor.lua maps <leader>a (add), <leader>m (menu), and <C-p>,
+-- <C-t>, <C-s> and <C-n> (slots 1 to 4).
 --
 -- Only files can be anchored: not netrw listings, terminals, help, or
 -- scratch and unnamed buffers. Opening a file that is already open
@@ -182,7 +182,7 @@ end
 --- :Anchor N: opens the file in slot n in the current window. Returns
 --- true, or false.
 function M.select(n)
-    -- From the menu (<leader>N works there too), save and leave it first,
+    -- From the menu (the slot keys work there too), save and leave it first,
     -- for the window it was opened from.
     if menu().is_current() and not menu().close() then
         return false

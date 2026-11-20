@@ -15,9 +15,9 @@
 -- A file anchored in the window's project shows its slot first, as the key
 -- that opens it, or its number for a slot without one,
 --
---   [C-t] neo: sub/file.txt
+--   [T] neo: sub/file.txt
 --
--- (and "[C-t] " goes in front of %f's name for one outside the project).
+-- (and "[T] " goes in front of %f's name for one outside the project).
 -- The anchor plugin registers the slotter that knows the slots, as the
 -- projects plugin registers the namer.
 --
@@ -116,7 +116,7 @@ function M.label(buf)
 end
 
 -- The slot of buffer buf (default: the current one) in the current
--- window's project, as text to show ("C-t", "2"), or nil when it has none
+-- window's project, as text to show ("T", "2"), or nil when it has none
 -- or isn't a file.
 function M.slot(buf)
     buf = buf or 0

@@ -26,7 +26,7 @@
 -- gone says so instead of opening an empty buffer.
 --
 -- The statusline shows an anchored file's slot key in front of its name,
--- "[C-t] neo: sub/file.txt" (see picker/statusline.lua), going by each
+-- "[T] neo: sub/file.txt" for <C-t> (see picker/statusline.lua), going by each
 -- window's own project, so it is the key that opens the file from that
 -- window. A slot without a key (one past the keys map() was given, or one
 -- whose key now does something else, say a buffer-local mapping) shows
@@ -115,19 +115,24 @@ function M.map(keys)
     end
 end
 
--- How the statusline shows slot n: its key, written as map() was given it
--- with a lone <...> key's brackets dropped ("C-t" for <C-t>), as long as
--- that key still opens the slot in the current buffer; else n.
+-- How the statusline shows slot n: its key as map() was given it, a lone
+-- Ctrl key by its letter ("T" for <C-t>) and another lone <...> key without
+-- its brackets ("M-t" for <M-t>), as long as that key still opens the slot
+-- in the current buffer; else n.
 local function key_of(n)
     local key = slot_keys[n]
     if key and vim.fn.maparg(key.lhs, "n", false, true).callback == key.callback then
+        local ctrl = key.lhs:match("^<[Cc]%-(.)>$")
+        if ctrl then
+            return ctrl:upper()
+        end
         return key.lhs:match("^<([^<>]+)>$") or key.lhs
     end
     return tostring(n)
 end
 
 --- What the statusline shows for the file at path (absolute) in the
---- project at dir: the key that opens its slot ("C-t"), else the slot's
+--- project at dir: the key that opens its slot ("T"), else the slot's
 --- number ("5"), or nil when it isn't anchored. Like slot(), cheap enough
 --- for every redraw.
 function M.slot_label(path, dir)

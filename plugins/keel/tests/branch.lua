@@ -124,7 +124,8 @@ return function(t)
         t.eq("fetch leaves the file", t.read(repo, "f"), "a\n")
         c.keys("F")
         t.eq("pull updates the file", t.read(repo, "f"), "from elsewhere\n")
-        t.ok("no longer behind", not c.has("behind 1"))
+        -- (shows the buffer and mode if it ever fails)
+        t.eq("no longer behind", c.has("behind 1") and { c.mode(), c.lines() } or false, false)
     end)
 
     t.child(function(c) -- open files follow a switch and a pull

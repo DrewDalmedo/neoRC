@@ -662,9 +662,12 @@ eq("complete subcommands", table.concat(vim.fn.getcompletion("Projects ", "cmdli
 eq("complete subcommand prefix", table.concat(vim.fn.getcompletion("Projects un", "cmdline"), ","), "untrack")
 eq("complete untrack paths", vim.tbl_contains(vim.fn.getcompletion("Projects untrack ", "cmdline"),
     vim.fn.fnamemodify(n(tmp .. "/Alpha"), ":~")), true)
-eq("complete track dirs", vim.tbl_contains(
-    vim.tbl_map(n, vim.fn.getcompletion("Projects track " .. n(tmp) .. "/Fi", "cmdline")),
-    n(tmp .. "/Firmware")), true)
+do
+    -- (resolved: Windows may complete a short 8.3 temp path to its long name)
+    local function resolved(path) return n(vim.uv.fs_realpath(path) or path) end
+    local dirs = vim.tbl_map(resolved, vim.fn.getcompletion("Projects track " .. n(tmp) .. "/Fi", "cmdline"))
+    eq("complete track dirs", vim.tbl_contains(dirs, resolved(tmp .. "/Firmware")) or dirs, true)
+end
 if vim.fn.has("win32") == 0 then
     local saved_home = vim.env.HOME
     vim.env.HOME = tmp

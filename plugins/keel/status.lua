@@ -711,6 +711,8 @@ function M.idle()
     if not git.idle() then return false end
     for _, state in pairs(states) do
         if state.refreshing then return false end
+        -- a render held for a mode that has since ended is about to land
+        if state.view.pending and vim.fn.mode(1) == "n" then return false end
     end
     return true
 end

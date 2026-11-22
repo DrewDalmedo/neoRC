@@ -161,13 +161,14 @@ return function(t)
     end)
 
     t.child(function(c) -- paths that look like patterns are only paths
-        local repo = t.repo({ ["a.txt"] = "1\n", ["*.txt"] = "2\n" })
+        -- (a glob that's also a legal file name on Windows, unlike *.txt)
+        local repo = t.repo({ ["a.txt"] = "1\n", ["[a].txt"] = "2\n" })
         t.write(repo, "a.txt", "changed\n")
-        t.write(repo, "*.txt", "changed\n")
+        t.write(repo, "[a].txt", "changed\n")
         c.open(repo)
-        c.jump("M *.txt")
+        c.jump("M [a].txt")
         c.keys("s")
-        t.eq("the literal file is staged", t.index(repo, "*.txt"), "changed\n")
+        t.eq("the literal file is staged", t.index(repo, "[a].txt"), "changed\n")
         t.eq("a pattern match isn't", t.index(repo, "a.txt"), "1\n")
     end)
 

@@ -547,7 +547,8 @@ do
     mentions("both says so", errors, "both a file and a directory")
 end
 
-if vim.fn.executable("mkfifo") == 1 then
+-- (Windows has no FIFOs, whatever a mkfifo from Git's tools makes there)
+if vim.fn.has("win32") == 0 and vim.fn.executable("mkfifo") == 1 then
     local dir = tree({ "d/x.txt" })
     vim.fn.system({ "mkfifo", dir .. "/d/pipe" })
     if vim.v.shell_error == 0 then
@@ -882,7 +883,7 @@ child(function(c)
     c.go("folder4/")
     c.keys("ccfolder5/<Esc>")
     c.save()
-    eq("cwd follows a move", c.lua("return vim.fn.getcwd()"), d2 .. "/folder5")
+    eq("cwd follows a move", vim.fs.normalize(c.lua("return vim.fn.getcwd()")), d2 .. "/folder5")
     eq("no listing left on the old path", c.lua([[
         return vim.fn.bufexists("harbor://" .. ...)
     ]], d2 .. "/folder4"), 0)
@@ -892,7 +893,7 @@ child(function(c)
     c.keys("dd")
     c.save()
     ok("directory deleted", not exists(d2 .. "/folder5"))
-    eq("cwd moved up", c.lua("return vim.fn.getcwd()"), d2)
+    eq("cwd moved up", vim.fs.normalize(c.lua("return vim.fn.getcwd()")), d2)
 
     -- files inside the config can change, the config itself can't
     local cfg = c.lua("return vim.fs.normalize(vim.fn.stdpath('config'))")

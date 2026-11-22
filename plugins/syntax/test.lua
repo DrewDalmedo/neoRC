@@ -125,6 +125,7 @@ local syntax_was_on = vim.g.syntax_on ~= nil
 if not syntax_was_on then vim.cmd("syntax enable") end
 local syntax_plugin = vim.fn.tempname()
 vim.fn.mkdir(syntax_plugin .. "/syntax", "p")
+syntax_plugin = vim.fs.normalize(vim.uv.fs_realpath(syntax_plugin))
 vim.fn.writefile({ 'let b:current_syntax = "elsewhere"' }, syntax_plugin .. "/syntax/fakelang.vim")
 vim.opt.runtimepath:prepend(syntax_plugin)
 local claimed_lines = { "begin" }

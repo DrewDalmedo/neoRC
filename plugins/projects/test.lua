@@ -498,7 +498,7 @@ projects.setup({ dirs = { tmp .. "/Alpha", { tmp .. "/Embedded/blinky", single =
 interact({ "delta" })
 projects.new_project({ default = "del" })
 eq("new asks once", #prompts, 1)
-eq("new prompt names the dir", prompts[1].prompt:find(vim.fn.fnamemodify(tmp .. "/Alpha", ":~"), 1, true) ~= nil, true)
+eq("new prompt names the dir", prompts[1].prompt:find(vim.fn.fnamemodify(n(tmp .. "/Alpha"), ":~"), 1, true) ~= nil, true)
 eq("new prompt pre-filled", prompts[1].default, "del")
 eq("new made it", vim.fn.isdirectory(tmp .. "/Alpha/delta"), 1)
 eq("new switched into it", switched, n(tmp .. "/Alpha/delta"))
@@ -662,8 +662,9 @@ eq("complete subcommands", table.concat(vim.fn.getcompletion("Projects ", "cmdli
 eq("complete subcommand prefix", table.concat(vim.fn.getcompletion("Projects un", "cmdline"), ","), "untrack")
 eq("complete untrack paths", vim.tbl_contains(vim.fn.getcompletion("Projects untrack ", "cmdline"),
     vim.fn.fnamemodify(n(tmp .. "/Alpha"), ":~")), true)
-eq("complete track dirs", vim.tbl_contains(vim.fn.getcompletion("Projects track " .. tmp .. "/Fi", "cmdline"),
-    tmp .. "/Firmware/"), true)
+eq("complete track dirs", vim.tbl_contains(
+    vim.tbl_map(n, vim.fn.getcompletion("Projects track " .. n(tmp) .. "/Fi", "cmdline")),
+    n(tmp .. "/Firmware")), true)
 if vim.fn.has("win32") == 0 then
     local saved_home = vim.env.HOME
     vim.env.HOME = tmp
@@ -687,14 +688,16 @@ eq(":Projects unknown subcommand", noted("unknown subcommand"), true)
 -- anything overlapping Neovim's config. HOME and the config dir are
 -- pointed into the fixture, so a broken guard could only cost the fixture.
 local function real(path) return n(vim.uv.fs_realpath(path) or path) end
-local saved_home_env = vim.env.HOME
+-- (the home directory comes from USERPROFILE on Windows)
+local saved_home_env, saved_profile_env = vim.env.HOME, vim.env.USERPROFILE
 vim.fn.mkdir(tmp .. "/fakehome/code", "p")
 vim.env.HOME = tmp .. "/fakehome"
+vim.env.USERPROFILE = tmp .. "/fakehome"
 eq("home is protected", projects.protected(tmp .. "/fakehome") ~= nil, true)
 eq("what holds home is protected", projects.protected(tmp) ~= nil, true)
 eq("a root is protected", projects.protected("/") ~= nil, true)
 eq("inside home is not", projects.protected(tmp .. "/fakehome/code"), nil)
-vim.env.HOME = saved_home_env
+vim.env.HOME, vim.env.USERPROFILE = saved_home_env, saved_profile_env
 local real_stdpath = vim.fn.stdpath
 local fake_config = tmp .. "/fakecfg"
 vim.fn.mkdir(fake_config .. "/lua/neo", "p")

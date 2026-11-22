@@ -81,8 +81,14 @@ end
 
 -- fixtures: a project with a subdirectory, a file outside it, and a
 -- 30-line file for cursor positions
+-- Resolved: a Windows temp directory can be an 8.3 short name, which
+-- would never match the real paths anchor stores.
 local tmp = vim.fn.tempname()
+vim.fn.mkdir(tmp, "p")
+tmp = store.real(tmp)
 local proj, other = tmp .. "/proj", tmp .. "/other"
+-- what the statusline separates a relative path with
+local SEP = (vim.fn.has("win32") == 1 and not vim.o.shellslash) and "\\" or "/"
 write(proj .. "/a.txt", { "a" })
 write(proj .. "/b.txt", { "b" })
 write(proj .. "/sub/c.txt", { "c" })
@@ -471,7 +477,7 @@ eq("slot_label is the key", anchor.slot_label(R .. "/a.txt", proj), "P")
 eq("slot_label of a slot without a key", anchor.slot_label(R .. "/sub/c.txt", proj), "3")
 eq("slot_label of no slot", anchor.slot_label(R .. "/long.txt", proj), nil)
 edit(proj .. "/sub/c.txt")
-starts("statusline: a slot without a key", "[3] proj: sub/c.txt ")
+starts("statusline: a slot without a key", "[3] proj: sub" .. SEP .. "c.txt ")
 edit(proj .. "/b.txt")
 vim.keymap.set("n", "<C-t>", "<Nop>", { buffer = 0 })
 starts("statusline: a key taken over in the buffer", "[2] proj: b.txt ")
@@ -485,7 +491,7 @@ starts("statusline: a key that isn't a lone <...>", "[<leader>1] proj: a.txt ")
 edit(proj .. "/b.txt")
 starts("statusline: another lone <...> key", "[M-t] proj: b.txt ")
 edit(proj .. "/sub/c.txt")
-starts("statusline: a Ctrl key written in lowercase", "[S] proj: sub/c.txt ")
+starts("statusline: a Ctrl key written in lowercase", "[S] proj: sub" .. SEP .. "c.txt ")
 for _, lhs in ipairs({ "<leader>1", "<M-t>", "<C-s>", "<C-p>", "<C-t>" }) do
     vim.keymap.del("n", lhs)
 end

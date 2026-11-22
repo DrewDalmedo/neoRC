@@ -68,6 +68,9 @@ local function run(name)
         cwd = root,
         stdio = { nil, fd, fd },
         detached = not windows, -- its own process group, for kill_tree
+        -- Its own hidden console, so a suite can't break the shared one that
+        -- every later suite would start from (exit 0xC0000142 on Windows).
+        hide = windows,
     }, function(c, s)
         code, signal, exited = c, s, true
     end)

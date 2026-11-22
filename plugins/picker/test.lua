@@ -164,22 +164,24 @@ local saved_cwd = vim.fn.getcwd()
 vim.cmd("cd " .. vim.fn.fnameescape(tree .. "/proj"))
 
 -- what the statusline of the current window shows
+-- what the statusline separates a relative path with
+local SEP = (vim.fn.has("win32") == 1 and not vim.o.shellslash) and "\\" or "/"
 local function shown()
     return vim.api.nvim_eval_statusline(vim.go.statusline, { winid = vim.api.nvim_get_current_win() }).str
 end
 
 -- a picked file: the project, then the path inside it
 util.open_file(tree .. "/proj/sub/file.txt")
-eq("label", statusline.label(), "proj: sub/file.txt")
-eq("statusline shows the project", shown():match("^proj: sub/file%.txt ") ~= nil, true)
+eq("label", statusline.label(), "proj: sub" .. SEP .. "file.txt")
+eq("statusline shows the project", shown():match("^proj: sub" .. SEP .. "file%.txt ") ~= nil, true)
 -- so does one opened by its full path, and one opened relative
 vim.cmd("edit " .. vim.fn.fnameescape(tree .. "/proj/sub/file.txt"))
-eq("full path opened", statusline.label(), "proj: sub/file.txt")
+eq("full path opened", statusline.label(), "proj: sub" .. SEP .. "file.txt")
 vim.cmd("edit sub/file.txt")
-eq("relative path opened", statusline.label(), "proj: sub/file.txt")
+eq("relative path opened", statusline.label(), "proj: sub" .. SEP .. "file.txt")
 -- a new file that isn't written yet is in the project too
 vim.cmd("edit sub/new.txt")
-eq("unwritten file", statusline.label(), "proj: sub/new.txt")
+eq("unwritten file", statusline.label(), "proj: sub" .. SEP .. "new.txt")
 
 -- a % in the name is text, not a statusline item
 vim.cmd("edit " .. vim.fn.fnameescape(tree .. "/proj/100%.txt"))
@@ -212,7 +214,7 @@ vim.cmd("lcd sub")
 eq("lcd: project is the window's dir", statusline.label(), "sub: file.txt")
 local other = vim.fn.win_getid(vim.fn.winnr("j"))
 eq("lcd: the other window keeps its own",
-    vim.api.nvim_eval_statusline(vim.go.statusline, { winid = other }).str:match("^proj: sub/file%.txt ") ~= nil, true)
+    vim.api.nvim_eval_statusline(vim.go.statusline, { winid = other }).str:match("^proj: sub" .. SEP .. "file%.txt ") ~= nil, true)
 vim.cmd("close")
 
 -- a namer names the project; nil, "" or an error leaves it to the basename
@@ -221,17 +223,17 @@ statusline.set_namer(function(dir)
     asked = dir
     return "Named"
 end)
-eq("namer names it", statusline.label(), "Named: sub/file.txt")
+eq("namer names it", statusline.label(), "Named: sub" .. SEP .. "file.txt")
 eq("namer gets the dir", asked, vim.fn.getcwd())
 asked = nil
 statusline.label()
 eq("names are remembered", asked, nil)
 statusline.set_namer(function() return nil end)
-eq("namer nil", statusline.label(), "proj: sub/file.txt")
+eq("namer nil", statusline.label(), "proj: sub" .. SEP .. "file.txt")
 statusline.set_namer(function() return "" end)
-eq("namer empty", statusline.label(), "proj: sub/file.txt")
+eq("namer empty", statusline.label(), "proj: sub" .. SEP .. "file.txt")
 statusline.set_namer(function() error("boom") end)
-eq("namer error", statusline.label(), "proj: sub/file.txt")
+eq("namer error", statusline.label(), "proj: sub" .. SEP .. "file.txt")
 statusline.set_namer(nil)
 
 -- a slotter puts the file's slot in front, a number or text (the key that
@@ -244,8 +246,8 @@ end)
 eq("slot", statusline.slot(), "2")
 eq("slotter gets the file", slot_args[1], vim.api.nvim_buf_get_name(0))
 eq("slotter gets the dir", slot_args[2], vim.fn.getcwd())
-eq("slot in front of the label", statusline.file(), "[2] proj: sub/file.txt")
-eq("slot shown", shown():match("^%[2%] proj: sub/file%.txt ") ~= nil, true)
+eq("slot in front of the label", statusline.file(), "[2] proj: sub" .. SEP .. "file.txt")
+eq("slot shown", shown():match("^%[2%] proj: sub" .. SEP .. "file%.txt ") ~= nil, true)
 vim.cmd("edit " .. vim.fn.fnameescape(tree .. "/proj/100%.txt"))
 eq("slot with a percent label", statusline.file(), "[2] proj: 100%%.txt")
 util.open_file(tree .. "/outside/far.txt")
@@ -262,10 +264,10 @@ vim.cmd("terminal")
 eq("no slot for a terminal", statusline.file(), "%f")
 vim.cmd("edit " .. vim.fn.fnameescape(tree .. "/proj/sub/file.txt"))
 statusline.set_slotter(function() return "T" end)
-eq("slot as text", statusline.file(), "[T] proj: sub/file.txt")
-eq("slot as text shown", shown():match("^%[T%] proj: sub/file%.txt ") ~= nil, true)
+eq("slot as text", statusline.file(), "[T] proj: sub" .. SEP .. "file.txt")
+eq("slot as text shown", shown():match("^%[T%] proj: sub" .. SEP .. "file%.txt ") ~= nil, true)
 statusline.set_slotter(function() return "5%" end)
-eq("slot text escaped", statusline.file(), "[5%%] proj: sub/file.txt")
+eq("slot text escaped", statusline.file(), "[5%%] proj: sub" .. SEP .. "file.txt")
 util.open_file(tree .. "/outside/far.txt")
 eq("slot text escaped before %f", statusline.file(), "[5%%] %f")
 vim.cmd("edit " .. vim.fn.fnameescape(tree .. "/proj/sub/file.txt"))
@@ -274,10 +276,10 @@ for _, bad in ipairs({ "nil", "empty", "zero", "fraction", "table", "error" }) d
         if bad == "error" then error("boom") end
         return ({ empty = "", zero = 0, fraction = 1.5, table = {} })[bad]
     end)
-    eq("slotter " .. bad, statusline.file(), "proj: sub/file.txt")
+    eq("slotter " .. bad, statusline.file(), "proj: sub" .. SEP .. "file.txt")
 end
 statusline.set_slotter(nil)
-eq("no slotter", statusline.file(), "proj: sub/file.txt")
+eq("no slotter", statusline.file(), "proj: sub" .. SEP .. "file.txt")
 
 -- the home directory and the root aren't projects
 local home = vim.uv.os_homedir()

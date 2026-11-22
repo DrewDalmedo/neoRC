@@ -663,9 +663,10 @@ eq("complete subcommand prefix", table.concat(vim.fn.getcompletion("Projects un"
 eq("complete untrack paths", vim.tbl_contains(vim.fn.getcompletion("Projects untrack ", "cmdline"),
     vim.fn.fnamemodify(n(tmp .. "/Alpha"), ":~")), true)
 do
-    -- (resolved: Windows may complete a short 8.3 temp path to its long name)
+    -- (resolved: a Windows temp path can hold an 8.3 name like RUNNER~1, and
+    -- Neovim 0.10's file completion reads that ~ as a wildcard)
     local function resolved(path) return n(vim.uv.fs_realpath(path) or path) end
-    local dirs = vim.tbl_map(resolved, vim.fn.getcompletion("Projects track " .. n(tmp) .. "/Fi", "cmdline"))
+    local dirs = vim.tbl_map(resolved, vim.fn.getcompletion("Projects track " .. resolved(tmp) .. "/Fi", "cmdline"))
     eq("complete track dirs", vim.tbl_contains(dirs, resolved(tmp .. "/Firmware")) or dirs, true)
 end
 if vim.fn.has("win32") == 0 then

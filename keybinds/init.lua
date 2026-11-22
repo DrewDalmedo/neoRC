@@ -9,4 +9,5 @@ require(prefix .. "scope")
 require(prefix .. "projects")
 require(prefix .. "anchor")
 require(prefix .. "lc")
+require(prefix .. "keel")
 

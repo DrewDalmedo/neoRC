@@ -491,6 +491,33 @@ for _, lhs in ipairs({ "<leader>1", "<M-t>", "<C-s>", "<C-p>", "<C-t>" }) do
 end
 vim.go.statusline = saved_statusline
 
+-- rename: slots in every project follow a file or directory that moved,
+-- and a project that moved keeps its list
+store.set("/r/proj", { "a.txt", "d/b.txt", "", "/r/out/c.txt" })
+store.set("/r/other", { "/r/proj/a.txt" })
+eq("rename a file", store.rename("/r/proj/a.txt", "/r/proj/z.txt"), true)
+same("rename: its own project", store.get("/r/proj"), { "z.txt", "d/b.txt", "", "/r/out/c.txt" })
+same("rename: another project", store.get("/r/other"), { "/r/proj/z.txt" })
+eq("rename a directory", store.rename("/r/proj/d", "/r/proj/e"), true)
+same("rename: inside a directory", store.get("/r/proj"), { "z.txt", "e/b.txt", "", "/r/out/c.txt" })
+eq("rename out of the project", store.rename("/r/proj/z.txt", "/r/out/z.txt"), true)
+same("rename: goes absolute", store.get("/r/proj"), { "/r/out/z.txt", "e/b.txt", "", "/r/out/c.txt" })
+eq("rename back in", store.rename("/r/out/z.txt", "/r/proj/z.txt"), true)
+same("rename: goes relative", store.get("/r/proj"), { "z.txt", "e/b.txt", "", "/r/out/c.txt" })
+eq("rename the project", store.rename("/r/proj", "/r/new"), true)
+same("rename: the list moved", store.get("/r/new"), { "z.txt", "e/b.txt", "", "/r/out/c.txt" })
+same("rename: nothing left behind", store.get("/r/proj"), {})
+same("rename: others follow it", store.get("/r/other"), { "/r/new/z.txt" })
+eq("rename something unanchored", store.rename("/r/nothing", "/r/else"), true)
+same("rename: a similar prefix isn't inside", (function()
+    store.set("/r/sim", { "/r/new2/x.txt" })
+    store.rename("/r/new", "/r/newer")
+    return store.get("/r/sim")
+end)(), { "/r/new2/x.txt" })
+for _, r in ipairs({ "/r/newer", "/r/other", "/r/sim" }) do
+    store.set(r, {})
+end
+
 vim.notify = saved_notify
 vim.cmd("cd " .. vim.fn.fnameescape(orig_cwd))
 vim.fn.delete(tmp, "rf")

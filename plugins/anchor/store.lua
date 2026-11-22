@@ -193,4 +193,59 @@ function M.set(root, slots)
     return write(doc)
 end
 
+-- path's new name when old moved to new, or nil when it isn't old or
+-- inside it.
+local function renamed(path, old, new)
+    if M.same(path, old) then
+        return new
+    end
+    local prefix = old:sub(-1) == "/" and old or old .. "/"
+    if #path > #prefix and M.same(path:sub(1, #prefix), prefix) then
+        return (new:sub(-1) == "/" and new or new .. "/") .. path:sub(#prefix + 1)
+    end
+    return nil
+end
+
+--- A file or directory moved from old to new (both absolute, resolved):
+--- every project's slots follow it, and a project that moved keeps its
+--- list. Returns true, or false and an error.
+function M.rename(old, new)
+    local doc = M.read()
+    local changed, moved_roots = false, {}
+    for root, slots in pairs(doc.projects) do
+        local new_root = renamed(root, old, new) or root
+        if new_root ~= root then
+            moved_roots[root] = new_root
+        end
+        if type(slots) == "table" then
+            for i, slot in ipairs(slots) do
+                if type(slot) == "string" and slot ~= "" then
+                    local abs = renamed(M.to_abs(slot, root), old, new)
+                    if abs then
+                        local stored = M.to_stored(abs, new_root)
+                        if stored ~= slot then
+                            slots[i] = stored
+                            changed = true
+                        end
+                    end
+                end
+            end
+        end
+    end
+    for root, new_root in pairs(moved_roots) do
+        -- (a list already at the new path is left as it is)
+        if doc.projects[new_root] == nil then
+            doc.projects[new_root] = doc.projects[root]
+            doc.projects[root] = nil
+            changed = true
+        end
+    end
+    if not changed then
+        return true
+    end
+    doc.version = M.VERSION
+    peeked = nil
+    return write(doc)
+end
+
 return M

@@ -102,12 +102,15 @@ eq("overridden <CR> doesn't close", p:valid(), true)
 p:close()
 
 local ITEM = "%{%v:lua.require('neo.plugins.picker.statusline').file()%}"
+local CUT_ITEM = "%{%v:lua.require('neo.plugins.picker.statusline').file(1)%}"
 
--- setup() swaps the %f of the statusline it finds for the item and keeps
--- the rest; running it again changes nothing
+-- setup() swaps the %f of the statusline it finds for the item, along with
+-- a %< right before it, and keeps the rest; running it again changes nothing
 local default = vim.go.statusline
 statusline.setup()
 local function swap_f(line)
+    local with, cut = line:gsub("%%<%%f", function() return CUT_ITEM end, 1)
+    if cut > 0 then return with end
     return (line:gsub("%%f", function() return ITEM end, 1))
 end
 if default ~= "" then
@@ -125,7 +128,7 @@ eq("setup twice is setup once", vim.go.statusline, installed)
 vim.go.statusline = ""
 if vim.go.statusline == "" then
     statusline.setup()
-    eq("empty statusline", vim.go.statusline, "%<" .. ITEM .. " %h%w%m%r%=%-14.(%l,%c%V%) %P")
+    eq("empty statusline", vim.go.statusline, CUT_ITEM .. " %h%w%m%r%=%-14.(%l,%c%V%) %P")
 else
     print("skip empty statusline (it can't be emptied here)")
 end
@@ -135,6 +138,18 @@ eq("no %f left alone", vim.go.statusline, "%l,%c")
 vim.go.statusline = "100%%f %f"
 statusline.setup()
 eq("%%f is not %f", vim.go.statusline, "100%%f " .. ITEM)
+-- only a real %< right before %f moves
+vim.go.statusline = "%<x %f"
+statusline.setup()
+eq("%< elsewhere stays", vim.go.statusline, "%<x " .. ITEM)
+vim.go.statusline = "%%<%f"
+statusline.setup()
+eq("%%< is not %<", vim.go.statusline, "%%<" .. ITEM)
+vim.go.statusline = "%<%f"
+statusline.setup()
+local cut_once = vim.go.statusline
+statusline.setup()
+eq("setup twice with %<", vim.go.statusline, cut_once)
 vim.go.statusline = installed
 
 -- a fixture project, with a file outside it
@@ -236,6 +251,11 @@ eq("slot with a percent label", statusline.file(), "[2] proj: 100%%.txt")
 util.open_file(tree .. "/outside/far.txt")
 eq("slot in front of %f", statusline.file(), "[2] %f")
 eq("slot shown in front of %f", shown():match("^%[2%] .*far%.txt ") ~= nil, true)
+-- a name too long for the window is cut after the slot, whatever the length
+-- of this machine's temporary directory
+local narrow = vim.api.nvim_eval_statusline(vim.go.statusline,
+    { winid = vim.api.nvim_get_current_win(), maxwidth = 24 }).str
+eq("long name keeps the slot", narrow:match("^%[2%] <") ~= nil, true)
 vim.cmd("enew")
 eq("no slot without a file", statusline.file(), "%f")
 vim.cmd("terminal")

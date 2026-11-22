@@ -90,6 +90,8 @@ function View:replace(lines, opts)
     local saved = save_views(self.buf)
     vim.api.nvim_buf_clear_namespace(self.buf, NS, 0, -1)
     write_lines(self.buf, lines)
+    -- What :e! goes back to.
+    self.rendered = vim.list_extend({}, lines)
 
     -- A failing cursor callback still leaves every window somewhere valid.
     local last, failure = vim.api.nvim_buf_line_count(self.buf), nil

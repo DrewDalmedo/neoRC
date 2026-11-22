@@ -120,13 +120,21 @@ function t.child(fn)
     function c.lua(code, ...)
         return vim.rpcrequest(chan, "nvim_exec_lua", code, { ... })
     end
+    -- A terminal can close during one of these requests. Neovim only leaves
+    -- Terminal mode, and draws the render it held back, after the request
+    -- returns and no other is queued, so the pause has to happen out here.
     function c.settle()
-        c.lua([[
-            local status = require("neo.plugins.keel.status")
-            vim.wait(30000, function() return status.idle() end, 5)
-            vim.wait(20)
-            vim.wait(30000, function() return status.idle() end, 5)
-        ]])
+        for _ = 1, 200 do
+            local settled = c.lua([[
+                local status = require("neo.plugins.keel.status")
+                vim.wait(30000, function() return status.idle() end, 5)
+                vim.wait(20)
+                local leaving_terminal = vim.fn.mode(1) == "t" and vim.bo.buftype ~= "terminal"
+                return status.idle() and not leaving_terminal
+            ]])
+            if settled then return end
+            vim.wait(10)
+        end
     end
     function c.keys(keys)
         vim.rpcrequest(chan, "nvim_input", keys)

@@ -14,6 +14,9 @@
 -- done(false). While a write is running another :w doesn't call on_write.
 -- :wq closes the window only if on_write finished saving before returning.
 --
+-- Focus returns to the view when :w ends, so open a confirm or other float
+-- from vim.schedule. Opened directly, its keys land in the view instead.
+--
 -- :w other-file and :1,2w other-file write a plain copy and never call
 -- on_write: saving a copy mustn't apply the buffer's changes.
 local M = {}

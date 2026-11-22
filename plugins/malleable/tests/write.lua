@@ -147,6 +147,37 @@ return function(t)
         t.eq(":w >> never runs on_write", calls, 0)
     end
 
+    t.child(function(c) -- a confirm from on_write opens on the next tick
+        c.lua([[
+            local malleable = require("neo.plugins.malleable")
+            _G.answer = nil
+            _G.view = malleable.open({
+                name = "malltest://write/confirm",
+                editable = true,
+                on_write = function(_, done)
+                    vim.schedule(function()
+                        malleable.confirm({
+                            lines = { "Apply?" },
+                            on_yes = function() answer = "yes"; done(true) end,
+                            on_no = function() answer = "no"; done(false) end,
+                        })
+                    end)
+                end,
+            })
+            vim.api.nvim_win_set_buf(0, view.buf)
+            vim.api.nvim_buf_set_lines(view.buf, 0, -1, false, { "edit" })
+        ]])
+        local result = "return { answer, vim.bo[view.buf].modified }"
+        c.keys(":w<CR>")
+        t.eq("scheduled confirm has focus", c.lua("return vim.bo.filetype"), "malleable_confirm")
+        c.keys("n")
+        t.eq("No fails the write", c.lua(result), { "no", true })
+        c.keys(":w<CR>")
+        t.eq("a retry asks again", c.lua("return vim.bo.filetype"), "malleable_confirm")
+        c.keys("y")
+        t.eq("Yes saves", c.lua(result), { "yes", false })
+    end)
+
     vim.cmd("enew!")
     vim.fn.delete(dir, "rf")
     vim.notify = real_notify

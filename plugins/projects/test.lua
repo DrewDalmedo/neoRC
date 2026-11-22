@@ -23,6 +23,7 @@ local projects = require("neo.plugins.projects")
 local store = require("neo.plugins.projects.store")
 local picker = require("neo.plugins.picker")
 local fuzzy = require("neo.plugins.picker.fuzzy")
+local malleable = require("neo.plugins.malleable")
 
 store.file = vim.fs.joinpath(vim.fn.tempname(), "projects.json")
 
@@ -497,7 +498,7 @@ projects.setup({ dirs = { tmp .. "/Alpha", { tmp .. "/Embedded/blinky", single =
 interact({ "delta" })
 projects.new_project({ default = "del" })
 eq("new asks once", #prompts, 1)
-eq("new prompt names the dir", prompts[1].prompt:find(vim.fn.fnamemodify(tmp .. "/Alpha", ":~"), 1, true) ~= nil, true)
+eq("new prompt names the dir", prompts[1].prompt:find(vim.fn.fnamemodify(n(tmp .. "/Alpha"), ":~"), 1, true) ~= nil, true)
 eq("new prompt pre-filled", prompts[1].default, "del")
 eq("new made it", vim.fn.isdirectory(tmp .. "/Alpha/delta"), 1)
 eq("new switched into it", switched, n(tmp .. "/Alpha/delta"))
@@ -661,8 +662,13 @@ eq("complete subcommands", table.concat(vim.fn.getcompletion("Projects ", "cmdli
 eq("complete subcommand prefix", table.concat(vim.fn.getcompletion("Projects un", "cmdline"), ","), "untrack")
 eq("complete untrack paths", vim.tbl_contains(vim.fn.getcompletion("Projects untrack ", "cmdline"),
     vim.fn.fnamemodify(n(tmp .. "/Alpha"), ":~")), true)
-eq("complete track dirs", vim.tbl_contains(vim.fn.getcompletion("Projects track " .. tmp .. "/Fi", "cmdline"),
-    tmp .. "/Firmware/"), true)
+do
+    -- (resolved: a Windows temp path can hold an 8.3 name like RUNNER~1, and
+    -- Neovim 0.10's file completion reads that ~ as a wildcard)
+    local function resolved(path) return n(vim.uv.fs_realpath(path) or path) end
+    local dirs = vim.tbl_map(resolved, vim.fn.getcompletion("Projects track " .. resolved(tmp) .. "/Fi", "cmdline"))
+    eq("complete track dirs", vim.tbl_contains(dirs, resolved(tmp .. "/Firmware")) or dirs, true)
+end
 if vim.fn.has("win32") == 0 then
     local saved_home = vim.env.HOME
     vim.env.HOME = tmp
@@ -686,14 +692,16 @@ eq(":Projects unknown subcommand", noted("unknown subcommand"), true)
 -- anything overlapping Neovim's config. HOME and the config dir are
 -- pointed into the fixture, so a broken guard could only cost the fixture.
 local function real(path) return n(vim.uv.fs_realpath(path) or path) end
-local saved_home_env = vim.env.HOME
+-- (the home directory comes from USERPROFILE on Windows)
+local saved_home_env, saved_profile_env = vim.env.HOME, vim.env.USERPROFILE
 vim.fn.mkdir(tmp .. "/fakehome/code", "p")
 vim.env.HOME = tmp .. "/fakehome"
+vim.env.USERPROFILE = tmp .. "/fakehome"
 eq("home is protected", projects.protected(tmp .. "/fakehome") ~= nil, true)
 eq("what holds home is protected", projects.protected(tmp) ~= nil, true)
 eq("a root is protected", projects.protected("/") ~= nil, true)
 eq("inside home is not", projects.protected(tmp .. "/fakehome/code"), nil)
-vim.env.HOME = saved_home_env
+vim.env.HOME, vim.env.USERPROFILE = saved_home_env, saved_profile_env
 local real_stdpath = vim.fn.stdpath
 local fake_config = tmp .. "/fakecfg"
 vim.fn.mkdir(fake_config .. "/lua/neo", "p")
@@ -960,6 +968,25 @@ if vim.fn.executable("git") == 1 then
     vim.notify = saved_notify
     eq("clone onto an existing dir refused", noted("already exists"), true)
 
+    -- with unsaved edits in a view, a finished clone doesn't pop a question
+    -- up mid-keystroke: it stays put and says where the clone went
+    local held = malleable.open({
+        name = "test://clone-held",
+        editable = true,
+        on_write = function() end,
+    })
+    vim.api.nvim_buf_set_lines(held.buf, 0, -1, false, { "pending" })
+    finished, switched = false, nil
+    capture()
+    projects.clone(tmp .. "/Repos", { "file://" .. src, "while-unsaved" }, on_done)
+    wait_clone()
+    vim.notify = saved_notify
+    eq("clone with unsaved edits is made", vim.fn.filereadable(tmp .. "/Repos/while-unsaved/README"), 1)
+    eq("clone with unsaved edits stays put", switched, nil)
+    eq("clone with unsaved edits says so", noted("staying here"), true)
+    eq("clone with unsaved edits still finishes", cloned and n(cloned), n(tmp .. "/Repos/while-unsaved"))
+    vim.api.nvim_buf_delete(held.buf, { force = true })
+
     -- a bad name after the URL never reaches git
     interact({ "file://" .. src .. " a/b" })
     capture()
@@ -976,9 +1003,8 @@ vim.fn.confirm = nil
 reset_store()
 
 -- switch() kills every open buffer (saving the file-backed modified ones),
--- collapses tabs and windows, cds, and lands in netrw on the project root.
--- nvim -l skips plugin files, so pull netrw in by hand first.
-vim.cmd("runtime! plugin/netrwPlugin.vim")
+-- collapses tabs and windows, cds, and lands in Harbor on the project root.
+local harbor = require("neo.plugins.harbor")
 local orig_cwd = vim.fn.getcwd()
 local function norm_dir(path)
     -- realpath: macOS tempdirs live behind a /var -> /private/var symlink,
@@ -998,7 +1024,7 @@ local scratch_buf = vim.api.nvim_create_buf(true, true)
 vim.api.nvim_buf_set_lines(scratch_buf, 0, -1, false, { "scratch junk" })
 vim.api.nvim_set_current_buf(scratch_buf)
 vim.cmd("terminal")
-local term_buf = vim.api.nvim_get_current_buf()
+local term_buf, term_job = vim.api.nvim_get_current_buf(), vim.b.terminal_job_id
 vim.cmd("enew")
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { "unnamed junk" })
 local unnamed_buf = vim.api.nvim_get_current_buf()
@@ -1006,6 +1032,9 @@ local unnamed_buf = vim.api.nvim_get_current_buf()
 vim.notify = function() end
 projects.switch(tmp .. "/Embedded/blinky")
 vim.notify = saved_notify
+-- Let the killed terminal finish closing: a Windows run on Neovim 0.10
+-- crashed at exit after every check had passed, seemingly over this.
+vim.fn.jobwait({ term_job }, 5000)
 
 eq("switch cwd", norm_dir(vim.fn.getcwd()), norm_dir(tmp .. "/Embedded/blinky"))
 eq("switch one tab", vim.fn.tabpagenr("$"), 1)
@@ -1018,9 +1047,9 @@ eq("switch killed unnamed buffer", vim.api.nvim_buf_is_valid(unnamed_buf), false
 local written = io.open(dirty_file, "r")
 eq("switch saved modified file", written and written:read("*l"), "saved on switch")
 if written then written:close() end
-eq("switch lands in netrw", vim.bo.filetype, "netrw")
-eq("switch netrw shows project root",
-    norm_dir(vim.api.nvim_buf_get_name(0)), norm_dir(tmp .. "/Embedded/blinky"))
+eq("switch lands in Harbor", vim.bo.filetype, "harbor")
+eq("switch Harbor shows project root",
+    norm_dir(harbor.dir(0)), norm_dir(tmp .. "/Embedded/blinky"))
 
 -- a modified buffer whose write fails survives the sweep with its changes
 -- (and a complaint) while the rest of the switch still happens
@@ -1035,7 +1064,7 @@ eq("failed save keeps buffer", vim.api.nvim_buf_is_valid(kept_buf), true)
 eq("failed save keeps changes", vim.bo[kept_buf].modified, true)
 eq("failed save reported", notified:find("save failed", 1, true) ~= nil, true)
 eq("failed save still cds", norm_dir(vim.fn.getcwd()), norm_dir(tmp .. "/Alpha"))
-eq("failed save still lands in netrw", vim.bo.filetype, "netrw")
+eq("failed save still lands in Harbor", vim.bo.filetype, "harbor")
 
 -- switching to a missing directory refuses before killing anything
 vim.cmd("edit " .. vim.fn.fnameescape(tmp .. "/Alpha/notes.txt"))
@@ -1047,6 +1076,144 @@ vim.notify = saved_notify
 eq("missing dir warns", notified:find("not a directory", 1, true) ~= nil, true)
 eq("missing dir keeps buffers", vim.api.nvim_buf_is_valid(survivor_buf), true)
 eq("missing dir keeps cwd", norm_dir(vim.fn.getcwd()), norm_dir(tmp .. "/Alpha"))
+
+-- Malleable views with unsaved edits: switch() names them in a question
+-- that only y answers Yes, and nothing moves until it's answered.
+do
+    local function press(lhs)
+        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(lhs, true, false, true), "mx", false)
+        drain()
+    end
+    local function read_file(file)
+        local h = io.open(file, "r")
+        if not h then return nil end
+        local line = h:read("*l")
+        h:close()
+        return line
+    end
+    local function make_view(name, edited)
+        local view = malleable.open({ name = name, editable = true, on_write = function() end })
+        view:replace({ "rendered" })
+        if edited then
+            vim.api.nvim_buf_set_lines(view.buf, 0, -1, false, { "pending edit" })
+        end
+        return view
+    end
+    -- a fresh layout: two tabs, a split, a view on show and a dirty file
+    local function arrange(file, view_name)
+        vim.fn.writefile({ "on disk" }, file)
+        vim.cmd("silent! %bwipeout!")
+        vim.cmd("cd " .. vim.fn.fnameescape(tmp .. "/Alpha"))
+        vim.cmd("edit " .. vim.fn.fnameescape(file))
+        vim.api.nvim_buf_set_lines(0, 0, -1, false, { "typed" })
+        local file_buf = vim.api.nvim_get_current_buf()
+        local view = make_view(view_name, true)
+        vim.cmd("vsplit")
+        vim.api.nvim_win_set_buf(0, view.buf)
+        vim.cmd("tabnew")
+        vim.cmd("tabprevious")
+        return file_buf, view
+    end
+    local function layout()
+        local bufs = vim.api.nvim_list_bufs()
+        return vim.inspect({
+            cwd = vim.fn.getcwd(),
+            tab = vim.api.nvim_get_current_tabpage(),
+            tabs = vim.api.nvim_list_tabpages(),
+            win = vim.api.nvim_get_current_win(),
+            wins = vim.api.nvim_list_wins(),
+            bufs = bufs,
+            shown = vim.tbl_map(vim.api.nvim_win_get_buf, vim.api.nvim_list_wins()),
+        })
+    end
+    local function asking()
+        return vim.bo.filetype == "malleable_confirm"
+    end
+    local function question()
+        return table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+    end
+    local function quietly(fn)
+        vim.notify = function() end
+        fn()
+        drain()
+        vim.notify = saved_notify
+    end
+
+    -- nothing unsaved: no question, even with a clean view open, and a
+    -- modified file is saved as ever
+    local plain = tmp .. "/Alpha/plain.txt"
+    vim.fn.writefile({ "on disk" }, plain)
+    vim.cmd("silent! %bwipeout!")
+    vim.cmd("edit " .. vim.fn.fnameescape(plain))
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "typed" })
+    local clean_view = make_view("test://clean", false)
+    eq("clean view isn't unsaved", #malleable.unsaved(), 0)
+    quietly(function() projects.switch(tmp .. "/Embedded/blinky") end)
+    eq("no unsaved views: no question", asking(), false)
+    eq("no unsaved views: switched", norm_dir(vim.fn.getcwd()), norm_dir(tmp .. "/Embedded/blinky"))
+    eq("no unsaved views: clean view closed", vim.api.nvim_buf_is_valid(clean_view.buf), false)
+    eq("no unsaved views: modified file saved", read_file(plain), "typed")
+
+    -- each way of saying No leaves it all exactly as it was
+    for _, lhs in ipairs({ "n", "<CR>", "<Esc>", "q" }) do
+        local label = "No (" .. lhs .. "): "
+        local file = tmp .. "/Alpha/held.txt"
+        local file_buf, view = arrange(file, "test://harbor/held")
+        local before = layout()
+        projects.switch(tmp .. "/Embedded/blinky")
+        eq(label .. "nothing happens before the question", layout(), before)
+        drain()
+        eq(label .. "asks", asking(), true)
+        eq(label .. "names the view", question():find("test://harbor/held", 1, true) ~= nil, true)
+        eq(label .. "names the destination", question():find("blinky", 1, true) ~= nil, true)
+        eq(label .. "file not saved while asking", read_file(file), "on disk")
+        press(lhs)
+        eq(label .. "question gone", asking(), false)
+        eq(label .. "layout untouched", layout(), before)
+        eq(label .. "view still unsaved", vim.bo[view.buf].modified, true)
+        eq(label .. "view keeps its edit", vim.api.nvim_buf_get_lines(view.buf, 0, 1, false)[1], "pending edit")
+        eq(label .. "file buffer still modified", vim.bo[file_buf].modified, true)
+        eq(label .. "file not saved", read_file(file), "on disk")
+        vim.cmd("silent! tabonly!")
+    end
+
+    -- Yes goes on: the view's edits go, modified files are still saved
+    local yes_file = tmp .. "/Alpha/yes.txt"
+    local yes_buf, yes_view = arrange(yes_file, "test://keel/commit")
+    local second = make_view("test://harbor/second", true)
+    projects.switch(tmp .. "/Embedded/blinky")
+    drain()
+    eq("Yes: every view is named", question():find("test://keel/commit", 1, true) ~= nil
+        and question():find("test://harbor/second", 1, true) ~= nil, true)
+    quietly(function() press("y") end)
+    eq("Yes: question gone", asking(), false)
+    eq("Yes: switched", norm_dir(vim.fn.getcwd()), norm_dir(tmp .. "/Embedded/blinky"))
+    eq("Yes: one tab", vim.fn.tabpagenr("$"), 1)
+    eq("Yes: one window", #vim.api.nvim_list_wins(), 1)
+    eq("Yes: lands in Harbor", vim.bo.filetype, "harbor")
+    eq("Yes: views closed", vim.api.nvim_buf_is_valid(yes_view.buf) or vim.api.nvim_buf_is_valid(second.buf), false)
+    eq("Yes: nothing left unsaved", #malleable.unsaved(), 0)
+    eq("Yes: file buffer closed", vim.api.nvim_buf_is_valid(yes_buf), false)
+    eq("Yes: modified file saved", read_file(yes_file), "typed")
+
+    -- a destination that vanishes while the question is up stops the switch
+    local doomed_dir = tmp .. "/Alpha/vanishing"
+    vim.fn.mkdir(doomed_dir, "p")
+    local stay_file = tmp .. "/Alpha/stay.txt"
+    local _, stay_view = arrange(stay_file, "test://harbor/stay")
+    projects.switch(doomed_dir)
+    drain()
+    vim.fn.delete(doomed_dir, "rf")
+    notified = ""
+    vim.notify = function(msg) notified = notified .. "\n" .. msg end
+    press("y")
+    vim.notify = saved_notify
+    eq("vanished destination reported", notified:find("not a directory", 1, true) ~= nil, true)
+    eq("vanished destination keeps the view", vim.bo[stay_view.buf].modified, true)
+    eq("vanished destination keeps cwd", norm_dir(vim.fn.getcwd()), norm_dir(tmp .. "/Alpha"))
+    vim.cmd("silent! tabonly!")
+    vim.cmd("silent! %bwipeout!")
+end
 
 vim.cmd("cd " .. vim.fn.fnameescape(orig_cwd))
 vim.fn.delete(tmp, "rf")

@@ -26,6 +26,9 @@
 local M = {}
 
 local ITEM = "%{%v:lua.require('neo.plugins.picker.statusline').file()%}"
+-- The item for a %< right before %f. It carries the %< itself, after the
+-- slot, so a name too long for the window is cut without losing the slot.
+local CUT_ITEM = "%{%v:lua.require('neo.plugins.picker.statusline').file(1)%}"
 -- Older Neovim leaves 'statusline' empty for its built-in one; this is
 -- that one written out.
 local BUILTIN = "%<%f %h%w%m%r%=%-14.(%l,%c%V%) %P"
@@ -140,27 +143,35 @@ local function escape(text)
 end
 
 -- The statusline item: %{%...%} evaluates it in the window whose statusline
--- is being drawn, and reads the result as statusline text.
-function M.file()
+-- is being drawn, and reads the result as statusline text. With cut, the
+-- statusline's truncation point (%<) goes between the slot and the name.
+function M.file(cut)
     local ok, slot = pcall(M.slot)
-    local prefix = ok and slot and ("[" .. slot .. "] ") or ""
+    local prefix = ok and slot and escape("[" .. slot .. "] ") or ""
+    if cut then prefix = prefix .. "%<" end
     local label
     ok, label = pcall(M.label)
-    if not ok or not label then return escape(prefix) .. "%f" end
-    return escape(prefix .. label)
+    if not ok or not label then return prefix .. "%f" end
+    return prefix .. escape(label)
 end
 
--- Put M.file() in place of %f in the global 'statusline'. A statusline
--- without %f is left alone.
+-- Put M.file() in place of %f in the global 'statusline', taking over a %<
+-- right before it. A statusline without %f is left alone.
 function M.setup()
-    if vim.go.statusline:find(ITEM, 1, true) then return end
-    local line = vim.go.statusline ~= "" and vim.go.statusline or BUILTIN
+    local current = vim.go.statusline
+    if current:find(ITEM, 1, true) or current:find(CUT_ITEM, 1, true) then return end
+    local line = current ~= "" and current or BUILTIN
     -- item by item, so a literal %% followed by an f isn't taken for %f
-    local found = false
-    local with = line:gsub("%%(.)", function(c)
-        if c == "f" and not found then
+    local found, cut = false, false
+    local with = line:gsub("()%%(.)", function(pos, c)
+        if found then return nil end
+        if c == "<" and line:sub(pos + 2, pos + 3) == "%f" then
+            cut = true
+            return ""
+        end
+        if c == "f" then
             found = true
-            return ITEM
+            return cut and CUT_ITEM or ITEM
         end
     end)
     if found then

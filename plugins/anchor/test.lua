@@ -81,8 +81,14 @@ end
 
 -- fixtures: a project with a subdirectory, a file outside it, and a
 -- 30-line file for cursor positions
+-- Resolved: a Windows temp directory can be an 8.3 short name, which
+-- would never match the real paths anchor stores.
 local tmp = vim.fn.tempname()
+vim.fn.mkdir(tmp, "p")
+tmp = store.real(tmp)
 local proj, other = tmp .. "/proj", tmp .. "/other"
+-- what the statusline separates a relative path with
+local SEP = (vim.fn.has("win32") == 1 and not vim.o.shellslash) and "\\" or "/"
 write(proj .. "/a.txt", { "a" })
 write(proj .. "/b.txt", { "b" })
 write(proj .. "/sub/c.txt", { "c" })
@@ -471,7 +477,7 @@ eq("slot_label is the key", anchor.slot_label(R .. "/a.txt", proj), "P")
 eq("slot_label of a slot without a key", anchor.slot_label(R .. "/sub/c.txt", proj), "3")
 eq("slot_label of no slot", anchor.slot_label(R .. "/long.txt", proj), nil)
 edit(proj .. "/sub/c.txt")
-starts("statusline: a slot without a key", "[3] proj: sub/c.txt ")
+starts("statusline: a slot without a key", "[3] proj: sub" .. SEP .. "c.txt ")
 edit(proj .. "/b.txt")
 vim.keymap.set("n", "<C-t>", "<Nop>", { buffer = 0 })
 starts("statusline: a key taken over in the buffer", "[2] proj: b.txt ")
@@ -485,11 +491,38 @@ starts("statusline: a key that isn't a lone <...>", "[<leader>1] proj: a.txt ")
 edit(proj .. "/b.txt")
 starts("statusline: another lone <...> key", "[M-t] proj: b.txt ")
 edit(proj .. "/sub/c.txt")
-starts("statusline: a Ctrl key written in lowercase", "[S] proj: sub/c.txt ")
+starts("statusline: a Ctrl key written in lowercase", "[S] proj: sub" .. SEP .. "c.txt ")
 for _, lhs in ipairs({ "<leader>1", "<M-t>", "<C-s>", "<C-p>", "<C-t>" }) do
     vim.keymap.del("n", lhs)
 end
 vim.go.statusline = saved_statusline
+
+-- rename: slots in every project follow a file or directory that moved,
+-- and a project that moved keeps its list
+store.set("/r/proj", { "a.txt", "d/b.txt", "", "/r/out/c.txt" })
+store.set("/r/other", { "/r/proj/a.txt" })
+eq("rename a file", store.rename("/r/proj/a.txt", "/r/proj/z.txt"), true)
+same("rename: its own project", store.get("/r/proj"), { "z.txt", "d/b.txt", "", "/r/out/c.txt" })
+same("rename: another project", store.get("/r/other"), { "/r/proj/z.txt" })
+eq("rename a directory", store.rename("/r/proj/d", "/r/proj/e"), true)
+same("rename: inside a directory", store.get("/r/proj"), { "z.txt", "e/b.txt", "", "/r/out/c.txt" })
+eq("rename out of the project", store.rename("/r/proj/z.txt", "/r/out/z.txt"), true)
+same("rename: goes absolute", store.get("/r/proj"), { "/r/out/z.txt", "e/b.txt", "", "/r/out/c.txt" })
+eq("rename back in", store.rename("/r/out/z.txt", "/r/proj/z.txt"), true)
+same("rename: goes relative", store.get("/r/proj"), { "z.txt", "e/b.txt", "", "/r/out/c.txt" })
+eq("rename the project", store.rename("/r/proj", "/r/new"), true)
+same("rename: the list moved", store.get("/r/new"), { "z.txt", "e/b.txt", "", "/r/out/c.txt" })
+same("rename: nothing left behind", store.get("/r/proj"), {})
+same("rename: others follow it", store.get("/r/other"), { "/r/new/z.txt" })
+eq("rename something unanchored", store.rename("/r/nothing", "/r/else"), true)
+same("rename: a similar prefix isn't inside", (function()
+    store.set("/r/sim", { "/r/new2/x.txt" })
+    store.rename("/r/new", "/r/newer")
+    return store.get("/r/sim")
+end)(), { "/r/new2/x.txt" })
+for _, r in ipairs({ "/r/newer", "/r/other", "/r/sim" }) do
+    store.set(r, {})
+end
 
 vim.notify = saved_notify
 vim.cmd("cd " .. vim.fn.fnameescape(orig_cwd))

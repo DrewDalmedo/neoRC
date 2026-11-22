@@ -118,17 +118,27 @@ eq("region rule", group_at(fake_lines, 1, "'str'", 1), "fakeString")
 eq("options applied", vim.bo.commentstring, "; %s")
 eq("link registered", vim.api.nvim_get_hl(0, { name = "fakeKw" }).link, "Keyword")
 
--- a buffer that already has b:current_syntax (a dedicated plugin got there
--- first) is left alone
+-- a dedicated syntax file for the filetype wins: it sets b:current_syntax
+-- during the builtin syntax pass, and the scheduled rules stand down. It
+-- has to be a real one: that pass clears a b:current_syntax set beforehand.
+local syntax_was_on = vim.g.syntax_on ~= nil
+if not syntax_was_on then vim.cmd("syntax enable") end
+local syntax_plugin = vim.fn.tempname()
+vim.fn.mkdir(syntax_plugin .. "/syntax", "p")
+syntax_plugin = vim.fs.normalize(vim.uv.fs_realpath(syntax_plugin))
+vim.fn.writefile({ 'let b:current_syntax = "elsewhere"' }, syntax_plugin .. "/syntax/fakelang.vim")
+vim.opt.runtimepath:prepend(syntax_plugin)
 local claimed_lines = { "begin" }
 local buf = vim.api.nvim_create_buf(true, true)
 vim.api.nvim_set_current_buf(buf)
 vim.api.nvim_buf_set_lines(buf, 0, -1, false, claimed_lines)
-vim.b.current_syntax = "elsewhere"
 vim.bo.filetype = "fakelang"
 drain()
 eq("claimed buffer untouched", group_at(claimed_lines, 1, "begin"), "")
 eq("claimed marker kept", vim.b.current_syntax, "elsewhere")
+vim.opt.runtimepath:remove(syntax_plugin)
+vim.fn.delete(syntax_plugin, "rf")
+if not syntax_was_on then vim.cmd("syntax off") end
 
 -- load_dir: *.lua files sorted, broken ones reported, other files ignored
 local fixture = vim.fn.tempname()

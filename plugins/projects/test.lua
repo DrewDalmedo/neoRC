@@ -1024,7 +1024,7 @@ local scratch_buf = vim.api.nvim_create_buf(true, true)
 vim.api.nvim_buf_set_lines(scratch_buf, 0, -1, false, { "scratch junk" })
 vim.api.nvim_set_current_buf(scratch_buf)
 vim.cmd("terminal")
-local term_buf = vim.api.nvim_get_current_buf()
+local term_buf, term_job = vim.api.nvim_get_current_buf(), vim.b.terminal_job_id
 vim.cmd("enew")
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { "unnamed junk" })
 local unnamed_buf = vim.api.nvim_get_current_buf()
@@ -1032,6 +1032,9 @@ local unnamed_buf = vim.api.nvim_get_current_buf()
 vim.notify = function() end
 projects.switch(tmp .. "/Embedded/blinky")
 vim.notify = saved_notify
+-- Let the killed terminal finish closing: a Windows run on Neovim 0.10
+-- crashed at exit after every check had passed, seemingly over this.
+vim.fn.jobwait({ term_job }, 5000)
 
 eq("switch cwd", norm_dir(vim.fn.getcwd()), norm_dir(tmp .. "/Embedded/blinky"))
 eq("switch one tab", vim.fn.tabpagenr("$"), 1)

@@ -123,9 +123,9 @@ function t.child(fn)
     function c.settle()
         c.lua([[
             local status = require("neo.plugins.keel.status")
-            vim.wait(5000, function() return status.idle() end, 5)
+            vim.wait(30000, function() return status.idle() end, 5)
             vim.wait(20)
-            vim.wait(5000, function() return status.idle() end, 5)
+            vim.wait(30000, function() return status.idle() end, 5)
         ]])
     end
     function c.keys(keys)

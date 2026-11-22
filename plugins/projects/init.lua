@@ -13,7 +13,10 @@
 -- file are saved first; scratch, terminal, and unnamed buffers are
 -- discarded), spare tabs and windows are closed, the working directory
 -- moves, and the remaining window shows a netrw listing of the project
--- root. File entries skip all of that; <CR> just opens the file.
+-- root. Unsaved edits in a malleable view (a commit message, a file
+-- manager's pending changes) can't be saved that way, so a question naming
+-- them comes first, and anything but Yes leaves everything as it was. File
+-- entries skip all of that; <CR> just opens the file.
 --
 -- The picker also changes what is tracked (its bottom border lists these):
 --   <C-n>  new project: choose the tracked directory it goes in (skipped
@@ -82,6 +85,7 @@ local picker = require("neo.plugins.picker")
 local util = require("neo.plugins.picker.util")
 local statusline = require("neo.plugins.picker.statusline")
 local store = require("neo.plugins.projects.store")
+local malleable = require("neo.plugins.malleable")
 
 local M = {}
 
@@ -348,21 +352,16 @@ function M.name(dir)
     end
 end
 
--- Make `path` (resolved like a dirs entry) the active project. Every open
--- buffer is killed so nothing from the old project lingers: modified
--- buffers backed by a real file are saved first, while scratch, terminal,
--- and unnamed buffers have nowhere to be saved and are discarded. A buffer
--- whose write fails is kept alive (and complained about) rather than
--- losing its changes. Spare tabs and windows are closed, the working
--- directory moves, and the surviving window ends up on a fresh netrw
--- listing of the project root.
-function M.switch(path)
-    path = M.resolve(path)
+-- Whether path is a directory to switch into, complaining when it isn't.
+local function switchable(path)
     local stat = vim.uv.fs_stat(path)
-    if not stat or stat.type ~= "directory" then
-        vim.notify("projects: not a directory: " .. path, vim.log.levels.ERROR)
-        return
-    end
+    if stat and stat.type == "directory" then return true end
+    vim.notify("projects: not a directory: " .. path, vim.log.levels.ERROR)
+    return false
+end
+
+-- The switch itself, once nothing stands in its way (see M.switch).
+local function enter(path)
     pcall(vim.cmd, "silent tabonly!")
     pcall(vim.cmd, "silent only!")
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
@@ -389,6 +388,42 @@ function M.switch(path)
     vim.cmd("cd " .. vim.fn.fnameescape(path))
     vim.cmd("Explore " .. vim.fn.fnameescape(path))
     vim.notify("projects: switched to " .. path)
+end
+
+-- Make `path` (resolved like a dirs entry) the active project. Every open
+-- buffer is killed so nothing from the old project lingers: modified
+-- buffers backed by a real file are saved first, while scratch, terminal,
+-- and unnamed buffers have nowhere to be saved and are discarded. A buffer
+-- whose write fails is kept alive (and complained about) rather than
+-- losing its changes. Spare tabs and windows are closed, the working
+-- directory moves, and the surviving window ends up on a fresh netrw
+-- listing of the project root.
+--
+-- Malleable views with unsaved edits would be lost, so they're named in a
+-- question first, and the switch then waits for the answer: only Yes goes
+-- on, and until then nothing has been saved or closed. The question opens
+-- on the next tick, since the picker calls this from inside its <CR>.
+function M.switch(path)
+    path = M.resolve(path)
+    if not switchable(path) then return end
+    local unsaved = malleable.unsaved()
+    if #unsaved == 0 then
+        return enter(path)
+    end
+    local lines = { ("Discard unsaved edits and switch to %s?"):format(short(path)), "" }
+    for _, view in ipairs(unsaved) do
+        lines[#lines + 1] = "  " .. view.name
+    end
+    vim.schedule(function()
+        malleable.confirm({
+            title = " Unsaved edits ",
+            lines = lines,
+            on_yes = function()
+                -- it may have gone while the question was up
+                if switchable(path) then enter(path) end
+            end,
+        })
+    end)
 end
 
 -- Saves doc to the store, as an error message on failure. The statusline
@@ -735,11 +770,14 @@ end
 
 --- Run git clone args (see M.clone_args) in parent (resolved like a dirs
 --- entry), in the background, and switch into the clone once git is done.
---- git runs without a terminal, so where it would stop to ask for a
---- password or to trust a new host it fails instead, and says why. The
---- clone is the directory that appears in parent. on_done(path) follows
---- the switch, or on_done(nil, err) a failure (already reported). Returns
---- git's process (vim.SystemObj), or nil when it couldn't start.
+--- With a malleable view holding unsaved edits by then, it stays put and
+--- says so instead: M.switch's question would take the keyboard at a moment
+--- you didn't choose, and a stray y would answer it. git runs without a
+--- terminal, so where it would stop to ask for a password or to trust a
+--- new host it fails instead, and says why. The clone is the directory
+--- that appears in parent. on_done(path) follows the switch, or
+--- on_done(nil, err) a failure (already reported). Returns git's process
+--- (vim.SystemObj), or nil when it couldn't start.
 function M.clone(parent, args, on_done)
     on_done = on_done or function() end
     parent = M.resolve(parent)
@@ -782,7 +820,12 @@ function M.clone(parent, args, on_done)
             return fail(("cloned, but can't tell which new directory in %s is the clone")
                 :format(short(parent)))
         end
-        M.switch(made[1])
+        if #malleable.unsaved() > 0 then
+            vim.notify(("projects: cloned %s, staying here to keep your unsaved edits")
+                :format(short(made[1])), vim.log.levels.WARN)
+        else
+            M.switch(made[1])
+        end
         on_done(made[1])
     end))
     if not ok then

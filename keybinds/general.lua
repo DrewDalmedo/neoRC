@@ -6,7 +6,7 @@ map("i", "<C-;>", function()
 end)
 map("t", "<C-;>", "<C-\\><C-n><cr>")
 
-map("n", "<leader>f", "<cmd>Ex<cr>")
+map("n", "<leader>f", "<cmd>Harbor<cr>")
 
 map("n", "<C-d>", "<C-d>zz")
 map("n", "<C-u>", "<C-u>zz")

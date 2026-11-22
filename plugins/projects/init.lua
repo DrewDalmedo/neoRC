@@ -12,7 +12,7 @@
 -- project: every open buffer is killed (modified buffers backed by a real
 -- file are saved first; scratch, terminal, and unnamed buffers are
 -- discarded), spare tabs and windows are closed, the working directory
--- moves, and the remaining window shows a netrw listing of the project
+-- moves, and the remaining window shows a Harbor listing of the project
 -- root. File entries skip all of that; <CR> just opens the file.
 --
 -- The picker also changes what is tracked (its bottom border lists these):
@@ -354,7 +354,7 @@ end
 -- and unnamed buffers have nowhere to be saved and are discarded. A buffer
 -- whose write fails is kept alive (and complained about) rather than
 -- losing its changes. Spare tabs and windows are closed, the working
--- directory moves, and the surviving window ends up on a fresh netrw
+-- directory moves, and the surviving window ends up on a fresh Harbor
 -- listing of the project root.
 function M.switch(path)
     path = M.resolve(path)
@@ -387,7 +387,7 @@ function M.switch(path)
         end
     end
     vim.cmd("cd " .. vim.fn.fnameescape(path))
-    vim.cmd("Explore " .. vim.fn.fnameescape(path))
+    require("neo.plugins.harbor").open(path)
     vim.notify("projects: switched to " .. path)
 end
 
@@ -503,8 +503,10 @@ end
 --- Why path mustn't be deleted, or nil when it may be. Kept: the home
 --- directory, a filesystem root, anything holding either, and anything
 --- overlapping Neovim's config (the running config included). Deleting a
---- symlink removes only the link, so only its own path counts.
-function M.protected(path)
+--- symlink removes only the link, so only its own path counts. With
+--- opts.allow_config_contents, files inside the config may go; the config
+--- directory itself and anything holding it are still kept.
+function M.protected(path, opts)
     path = vim.fs.normalize(path)
     local stat = vim.uv.fs_lstat(path)
     local mine = (stat and stat.type == "link") and { path } or forms(path)
@@ -522,7 +524,7 @@ function M.protected(path)
             if inside(config, p) then
                 return "it holds your Neovim config"
             end
-            if inside(p, config) then
+            if inside(p, config) and not (opts and opts.allow_config_contents) then
                 return "it's part of your Neovim config"
             end
         end

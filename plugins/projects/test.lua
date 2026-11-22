@@ -976,9 +976,8 @@ vim.fn.confirm = nil
 reset_store()
 
 -- switch() kills every open buffer (saving the file-backed modified ones),
--- collapses tabs and windows, cds, and lands in netrw on the project root.
--- nvim -l skips plugin files, so pull netrw in by hand first.
-vim.cmd("runtime! plugin/netrwPlugin.vim")
+-- collapses tabs and windows, cds, and lands in Harbor on the project root.
+local harbor = require("neo.plugins.harbor")
 local orig_cwd = vim.fn.getcwd()
 local function norm_dir(path)
     -- realpath: macOS tempdirs live behind a /var -> /private/var symlink,
@@ -1018,9 +1017,9 @@ eq("switch killed unnamed buffer", vim.api.nvim_buf_is_valid(unnamed_buf), false
 local written = io.open(dirty_file, "r")
 eq("switch saved modified file", written and written:read("*l"), "saved on switch")
 if written then written:close() end
-eq("switch lands in netrw", vim.bo.filetype, "netrw")
-eq("switch netrw shows project root",
-    norm_dir(vim.api.nvim_buf_get_name(0)), norm_dir(tmp .. "/Embedded/blinky"))
+eq("switch lands in Harbor", vim.bo.filetype, "harbor")
+eq("switch Harbor shows project root",
+    norm_dir(harbor.dir(0)), norm_dir(tmp .. "/Embedded/blinky"))
 
 -- a modified buffer whose write fails survives the sweep with its changes
 -- (and a complaint) while the rest of the switch still happens
@@ -1035,7 +1034,7 @@ eq("failed save keeps buffer", vim.api.nvim_buf_is_valid(kept_buf), true)
 eq("failed save keeps changes", vim.bo[kept_buf].modified, true)
 eq("failed save reported", notified:find("save failed", 1, true) ~= nil, true)
 eq("failed save still cds", norm_dir(vim.fn.getcwd()), norm_dir(tmp .. "/Alpha"))
-eq("failed save still lands in netrw", vim.bo.filetype, "netrw")
+eq("failed save still lands in Harbor", vim.bo.filetype, "harbor")
 
 -- switching to a missing directory refuses before killing anything
 vim.cmd("edit " .. vim.fn.fnameescape(tmp .. "/Alpha/notes.txt"))

@@ -58,7 +58,7 @@ The full option and controller reference is at the top of `plugins/picker/init.l
 
 ## Malleable buffers
 
-`neo.plugins.malleable` is the core under Keel and Harbor. It owns the buffer's lifecycle, safe redraws, keys, and the shape of a write. What the lines mean and what a write does stay in each plugin.
+`neo.plugins.malleable` is the core under Keel, Harbor, and lc. It owns the buffer's lifecycle, safe redraws, keys, and the shape of a write. What the lines mean and what a write does stay in each plugin.
 
 ```lua
 local malleable = require("neo.plugins.malleable")

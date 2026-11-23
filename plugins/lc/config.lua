@@ -29,13 +29,15 @@ M.defaults = {
     quickfix = true,
     -- vim.notify the verdict when a run ends.
     notify = true,
-    -- Keys in the result buffer; false disables one.
+    -- Keys in the result buffer; false disables one. close and help work in
+    -- every lc view.
     keys = {
         add_case = "a",
         jump = "<CR>",
         rerun = "r",
         cancel = "<C-c>",
         close = "q",
+        help = "g?",
     },
 }
 

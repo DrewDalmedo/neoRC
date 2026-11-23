@@ -309,27 +309,20 @@ end
 -- ------------------------------------------------------------------
 -- The result buffer
 
-local function result_buf()
-    local buf = ui.scratch("lc://result", "lcresult")
-    if not vim.b[buf].lc_keys then
-        local keys = config.get().keys
-        local function map(key, fn, desc)
-            if key then
-                vim.keymap.set("n", key, fn, { buffer = buf, nowait = true, desc = desc })
-            end
-        end
-        map(keys.add_case, M.add_case, "lc: add the case under the cursor to cases.txt")
-        map(keys.jump, M.jump, "lc: go to the case or the line under the cursor")
-        map(keys.rerun, M.rerun, "lc: run again")
-        map(keys.cancel, M.cancel, "lc: cancel the run")
-        map(keys.close, function()
-            if not pcall(vim.api.nvim_win_close, 0, false) then
-                vim.cmd("enew")
-            end
-        end, "lc: close the window")
-        vim.b[buf].lc_keys = true
-    end
-    return buf
+local function result_view()
+    local keys = config.get().keys
+    return ui.view("lc://result", {
+        filetype = "lcresult",
+        on_reload = function()
+            M.redraw()
+        end,
+        keys = ui.keys({
+            { keys.add_case, function() M.add_case() end, desc = "Add the case under the cursor to cases.txt" },
+            { keys.jump, function() M.jump() end, desc = "Go to the case or the line under the cursor" },
+            { keys.rerun, function() M.rerun() end, desc = "Run again" },
+            { keys.cancel, function() M.cancel() end, desc = "Cancel the run" },
+        }),
+    })
 end
 
 --- Opens the result window, unless the result option is false and force
@@ -342,7 +335,7 @@ function M.open_result(force)
         end
         split = "botright 15split"
     end
-    return ui.panel(result_buf(), split)
+    return ui.panel(result_view().buf, split)
 end
 
 local function status_line(run)
@@ -625,6 +618,9 @@ function M.render_lines(run)
     if keys.close then
         help[#help + 1] = keys.close .. " close"
     end
+    if keys.help then
+        help[#help + 1] = keys.help .. " keys"
+    end
     if #help > 0 then
         add("")
         add(table.concat(help, " · "), "LcDim")
@@ -632,75 +628,78 @@ function M.render_lines(run)
     return lines, hls, cases_at, locs
 end
 
--- Where a window's cursor is, as a case: which block of lines about it (a
--- case has a line in the table and a block of details), and how far in.
-local function anchor(win, cases_at)
-    local cursor = vim.api.nvim_win_get_cursor(win)
-    local c = cases_at and cases_at[cursor[1]]
+-- Where the line at row went: the same block of lines about its case (a
+-- case has a line in the table and a block of details), as far in. nil
+-- when the line isn't about a case, or its block is gone.
+local function case_row(before, after, count, row)
+    local c = before and before[row]
     if not c then
         return nil
     end
-    local start = cursor[1]
-    while start > 1 and cases_at[start - 1] == c do
+    local start = row
+    while start > 1 and before[start - 1] == c do
         start = start - 1
     end
-    local block = 0
+    local wanted = 0
     for l = 1, start do
-        if cases_at[l] == c and cases_at[l - 1] ~= c then
-            block = block + 1
+        if before[l] == c and before[l - 1] ~= c then
+            wanted = wanted + 1
         end
     end
-    return { case = c, block = block, offset = cursor[1] - start, col = cursor[2] }
-end
-
-local function restore(win, a, cases_at, count)
     local block = 0
     for l = 1, count do
-        if cases_at[l] == a.case and cases_at[l - 1] ~= a.case then
+        if after[l] == c and after[l - 1] ~= c then
             block = block + 1
-            if block == a.block then
-                local target = cases_at[l + a.offset] == a.case and l + a.offset or l
-                pcall(vim.api.nvim_win_set_cursor, win, { target, a.col })
-                return
+            if block == wanted then
+                local target = l + row - start
+                return after[target] == c and target or l
             end
         end
     end
+    return nil
 end
 
-local function render(run)
+local function draw(run, view)
     if run ~= M.last then
         return
     end
-    local buf = result_buf()
     local lines, hls, cases_at, locs = M.render_lines(run)
-    -- New lines go in above the details, so keep each cursor on its case.
-    local anchors = {}
-    for _, win in ipairs(vim.api.nvim_list_wins()) do
-        if vim.api.nvim_win_get_buf(win) == buf then
-            anchors[win] = anchor(win, run.cases_at)
-        end
-    end
+    local before = run.cases_at
     run.cases_at, run.locs = cases_at, locs
-    run.rendered_at = vim.uv.now()
-    ui.set_lines(buf, lines)
-    for win, a in pairs(anchors) do
-        restore(win, a, cases_at, #lines)
-    end
-    vim.api.nvim_buf_clear_namespace(buf, ui.ns, 0, -1)
-    for _, h in ipairs(hls) do
-        pcall(vim.api.nvim_buf_set_extmark, buf, ui.ns, h[1], h[2], { end_row = h[1], end_col = h[3], hl_group = h[4] })
-    end
-    vim.b[buf].lc_problem = run.info
-    -- Every window's statusline: status() may be in all of them.
-    vim.cmd("redrawstatus!")
+    -- New lines go in above the details, so keep each cursor on its case.
+    view:replace(lines, {
+        cursor = function(_, row)
+            return case_row(before, cases_at, #lines, row)
+        end,
+    })
+    ui.paint(view, hls)
+    vim.b[view.buf].lc_problem = run.info
+end
+
+local function draw_failed(err)
+    ui.error("lc: couldn't draw the result: " .. tostring(err))
 end
 
 -- Renders without letting an error stop the caller: a run's state must
--- still be finished off (M.current, LcRunDone) when drawing fails.
+-- still be finished off (M.current, LcRunDone) when drawing fails. While
+-- you're selecting in the result window, the lines wait until you're done.
 local function safe_render(run)
-    local ok, err = pcall(render, run)
+    if run ~= M.last then
+        return
+    end
+    run.rendered_at = vim.uv.now()
+    local ok, err = pcall(function()
+        result_view():when_stable(function(view)
+            local drew, why = pcall(draw, run, view)
+            if not drew then
+                draw_failed(why)
+            end
+        end)
+        -- Every window's statusline: status() may be in all of them.
+        vim.cmd("redrawstatus!")
+    end)
     if not ok then
-        ui.error("lc: couldn't draw the result: " .. tostring(err))
+        draw_failed(err)
     end
 end
 

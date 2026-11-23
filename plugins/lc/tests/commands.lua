@@ -12,7 +12,8 @@ local function complete(line)
 end
 
 test("completion", function()
-    H.eq(complete("Lc "), { "cancel", "list", "random", "result", "show", "start", "stats", "std", "submit", "test" })
+    H.eq(complete("Lc "), { "cancel", "list", "problems", "random", "result", "show", "start", "stats", "std", "submit", "test" })
+    H.eq(complete("Lc problems --"), { "--difficulty", "--status", "--tag" })
     H.eq(complete("Lc s"), { "show", "start", "stats", "std", "submit" })
     local two = complete("Lc show two")
     H.ok(vim.tbl_contains(two, "two-sum"), vim.inspect(two))
@@ -150,7 +151,7 @@ test("the neo picker starts the chosen problem", function()
     -- The prompt matches anything on the line: here the title.
     vim.api.nvim_buf_set_lines(p.ui.prompt_buf, 0, -1, false, { "palindrome" })
     p:refresh()
-    H.eq(p.filtered[p.selected].problem.id, 9)
+    H.eq(p.filtered[p.selected].value.id, 9)
     picker_enter(p)
     H.eq(require("neo.plugins.picker").current(), nil)
     H.ok(vim.api.nvim_buf_get_name(0):match("/0009%-palindrome%-number/solution%.cpp$"), vim.api.nvim_buf_get_name(0))

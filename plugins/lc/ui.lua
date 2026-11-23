@@ -1,9 +1,7 @@
 -- lua/neo/plugins/lc/ui.lua
--- Buffers, windows, highlights and messages.
+-- Views, windows, highlights and messages.
 
 local M = {}
-
-M.ns = vim.api.nvim_create_namespace("lc")
 
 local HIGHLIGHTS = {
     LcAccepted = "DiagnosticOk",
@@ -42,52 +40,81 @@ function M.warn_doc(doc)
     end
 end
 
+--- `lc <args> --json`, with its warnings shown; nil after an error, which
+--- is shown too, with the warnings that can explain it (a skipped pack).
+function M.json(args)
+    local doc, err, errdoc = require("neo.plugins.lc.cli").json(args)
+    M.warn_doc(doc or errdoc)
+    if not doc then
+        M.error("lc: " .. err)
+    end
+    return doc
+end
+
 local function vim_error(err)
     err = tostring(err)
     return err:match("E%d+:.*") or err
 end
 
-local function make_scratch(buf, filetype)
-    vim.b[buf].lc_scratch = true
-    vim.bo[buf].buftype = "nofile"
-    vim.bo[buf].bufhidden = "hide"
-    vim.bo[buf].swapfile = false
-    vim.bo[buf].buflisted = false
-    vim.bo[buf].modifiable = false
-    if filetype then
-        vim.bo[buf].filetype = filetype
-    end
-end
-
---- A scratch buffer with this name, made the first time. A buffer of that
---- name that isn't the plugin's (a session brings them back as plain empty
---- buffers) is made one.
-function M.scratch(name, filetype)
-    for _, b in ipairs(vim.api.nvim_list_bufs()) do
-        if vim.api.nvim_buf_get_name(b) == name then
-            if not vim.b[b].lc_scratch then
-                make_scratch(b, filetype)
-                -- Its windows, which a session doesn't mark either.
-                local mark = name:match("^lc://problem/") and "lc_statement" or "lc_result"
-                for _, win in ipairs(vim.fn.win_findbuf(b)) do
-                    vim.w[win][mark] = true
-                end
-            end
-            return b
+--- The read-only malleable view with this name, made the first time. A
+--- session brings lc's buffers back as plain empty ones: malleable adopts
+--- them, and their windows get the marks a session doesn't keep.
+--- opts are malleable.open's.
+function M.view(name, opts)
+    local view, created = require("neo.plugins.malleable").open(vim.tbl_extend("force", opts, { name = name }))
+    if created then
+        vim.b[view.buf].lc_scratch = true
+        local mark = name:match("^lc://problem/") and "lc_statement" or "lc_result"
+        for _, win in ipairs(vim.fn.win_findbuf(view.buf)) do
+            vim.w[win][mark] = true
         end
     end
-    local buf = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_name(buf, name)
-    make_scratch(buf, filetype)
-    return buf
+    return view
 end
 
---- Replaces a scratch buffer's lines.
-function M.set_lines(buf, lines)
-    vim.bo[buf].modifiable = true
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-    vim.bo[buf].modifiable = false
-    vim.bo[buf].modified = false
+--- A view's keys: list, without those the options turned off (false), then
+--- the close and help keys every view shares.
+function M.keys(list)
+    local options = require("neo.plugins.lc.config").get().keys
+    local keys = {}
+    for _, key in ipairs(list) do
+        if key[1] then
+            keys[#keys + 1] = key
+        end
+    end
+    if options.close then
+        keys[#keys + 1] = {
+            options.close,
+            function()
+                if not pcall(vim.api.nvim_win_close, 0, false) then
+                    vim.cmd("enew")
+                end
+            end,
+            desc = "Close the window",
+        }
+    end
+    if options.help then
+        keys[#keys + 1] = {
+            options.help,
+            function(view)
+                view:help()
+            end,
+            desc = "Show these keys",
+        }
+    end
+    return keys
+end
+
+--- Highlights a view's lines, after view:replace has cleared the last ones.
+--- hls: lists of { row (from 0), col, end col, highlight group }.
+function M.paint(view, hls)
+    for _, h in ipairs(hls) do
+        pcall(vim.api.nvim_buf_set_extmark, view.buf, view.ns, h[1], h[2], {
+            end_row = h[1],
+            end_col = h[3],
+            hl_group = h[4],
+        })
+    end
 end
 
 --- A window of this tab page that shows buf, or for which pred(win) holds.
@@ -107,7 +134,7 @@ function M.win_showing(buf)
 end
 
 --- Whether win is the plugin's window of this kind (mark): marked so, and
---- still showing the plugin's buffer there: a scratch buffer, or for a
+--- still showing the plugin's buffer there: one of its views, or for a
 --- statement a problem's README.md. A window that went on to show another
 --- buffer is yours again, and loses its mark.
 function M.marked(win, mark)
@@ -211,9 +238,9 @@ function M.edit(win, file)
     return true
 end
 
---- Shows buf in the panel at the bottom that the result and :Lc stats
---- share, opened with the Ex command `split` the first time. Returns the
---- window, or nil and an error.
+--- Shows buf in the panel at the bottom that the result, :Lc stats and
+--- :Lc problems share, opened with the Ex command `split` the first time.
+--- Returns the window, or nil and an error.
 function M.panel(buf, split)
     local win, err = M.show(buf, split, "lc_result")
     if not win then

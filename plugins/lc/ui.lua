@@ -3,6 +3,8 @@
 
 local M = {}
 
+local BOARD = "lc://problems"
+
 local HIGHLIGHTS = {
     LcAccepted = "DiagnosticOk",
     LcFailed = "DiagnosticError",
@@ -64,9 +66,12 @@ function M.view(name, opts)
     local view, created = require("neo.plugins.malleable").open(vim.tbl_extend("force", opts, { name = name }))
     if created then
         vim.b[view.buf].lc_scratch = true
-        local mark = name:match("^lc://problem/") and "lc_statement" or "lc_result"
-        for _, win in ipairs(vim.fn.win_findbuf(view.buf)) do
-            vim.w[win][mark] = true
+        -- (The board has a window of its own, not the panel.)
+        if name ~= BOARD then
+            local mark = name:match("^lc://problem/") and "lc_statement" or "lc_result"
+            for _, win in ipairs(vim.fn.win_findbuf(view.buf)) do
+                vim.w[win][mark] = true
+            end
         end
     end
     return view
@@ -131,6 +136,22 @@ function M.win_showing(buf)
     return M.find_win(function(win)
         return vim.api.nvim_win_get_buf(win) == buf
     end)
+end
+
+--- The window of this tab page that shows the problems board, if any.
+function M.board_win()
+    return M.find_win(function(win)
+        return vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win)) == BOARD
+    end)
+end
+
+--- Closes the board's windows in this tab page. Its buffer stays hidden,
+--- with its filters, for the next :Lc problems.
+function M.close_board()
+    local win = M.board_win()
+    while win and pcall(vim.api.nvim_win_close, win, false) do
+        win = M.board_win()
+    end
 end
 
 --- Whether win is the plugin's window of this kind (mark): marked so, and
@@ -238,19 +259,24 @@ function M.edit(win, file)
     return true
 end
 
---- Shows buf in the panel at the bottom that the result, :Lc stats and
---- :Lc problems share, opened with the Ex command `split` the first time.
---- Returns the window, or nil and an error.
+--- Turns off the gutter and the like for the buffer win shows. Local to
+--- the window and this buffer, so that a file you open in the window, or a
+--- window split from it, has your settings.
+function M.plain(win)
+    local wo = vim.wo[win][0]
+    wo.number, wo.relativenumber, wo.spell, wo.list = false, false, false, false
+    wo.signcolumn, wo.foldcolumn = "no", "0"
+end
+
+--- Shows buf in the panel at the bottom that the result and :Lc stats
+--- share, opened with the Ex command `split` the first time. Returns the
+--- window, or nil and an error.
 function M.panel(buf, split)
     local win, err = M.show(buf, split, "lc_result")
     if not win then
         return nil, err
     end
-    -- Local to the window and this buffer, so that a file you open in the
-    -- window, or a window split from it, has your settings.
-    local wo = vim.wo[win][0]
-    wo.number, wo.relativenumber, wo.spell, wo.list = false, false, false, false
-    wo.signcolumn, wo.foldcolumn = "no", "0"
+    M.plain(win)
     vim.wo[win].winfixheight = true
     return win
 end

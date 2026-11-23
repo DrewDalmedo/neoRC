@@ -360,13 +360,29 @@ local function switchable(path)
     return false
 end
 
--- The switch itself, once nothing stands in its way (see M.switch).
-local function enter(path)
+--- Closes spare tabs and windows and kills every buffer: modified buffers
+--- backed by a real file are saved first, and one whose write fails is kept
+--- (and complained about). With keep, that buffer survives too, and the
+--- remaining window shows it.
+function M.clear(keep)
     pcall(vim.cmd, "silent tabonly!")
+    -- (:only refuses to run from a float)
+    if vim.api.nvim_win_get_config(0).relative ~= "" then
+        for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+            if vim.api.nvim_win_get_config(win).relative == "" then
+                vim.api.nvim_set_current_win(win)
+                break
+            end
+        end
+    end
     pcall(vim.cmd, "silent only!")
+    if keep then
+        vim.wo.winfixbuf = false
+        vim.api.nvim_win_set_buf(0, keep)
+    end
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-        if vim.api.nvim_buf_is_valid(buf) then
-            local keep = false
+        if buf ~= keep and vim.api.nvim_buf_is_valid(buf) then
+            local kept = false
             if vim.bo[buf].modified then
                 local file = vim.api.nvim_buf_get_name(buf)
                 if vim.bo[buf].buftype == "" and file ~= "" then
@@ -374,17 +390,43 @@ local function enter(path)
                         vim.cmd("silent write")
                     end)
                     if not ok then
-                        keep = true
+                        kept = true
                         vim.notify(("projects: keeping %s, save failed:\n%s"):format(file, err),
                             vim.log.levels.ERROR)
                     end
                 end
             end
-            if not keep then
+            if not kept then
                 pcall(vim.api.nvim_buf_delete, buf, { force = true })
             end
         end
     end
+end
+
+--- Runs go() when no malleable view has unsaved edits. Otherwise asks
+--- question, naming them, on the next tick (a picker may be calling this
+--- from inside its <CR>), and only Yes runs go().
+function M.discarding(question, go)
+    local unsaved = malleable.unsaved()
+    if #unsaved == 0 then
+        return go()
+    end
+    local lines = { question, "" }
+    for _, view in ipairs(unsaved) do
+        lines[#lines + 1] = "  " .. view.name
+    end
+    vim.schedule(function()
+        malleable.confirm({
+            title = " Unsaved edits ",
+            lines = lines,
+            on_yes = go,
+        })
+    end)
+end
+
+-- The switch itself, once nothing stands in its way (see M.switch).
+local function enter(path)
+    M.clear()
     vim.cmd("cd " .. vim.fn.fnameescape(path))
     require("neo.plugins.harbor").open(path)
     vim.notify("projects: switched to " .. path)
@@ -406,23 +448,9 @@ end
 function M.switch(path)
     path = M.resolve(path)
     if not switchable(path) then return end
-    local unsaved = malleable.unsaved()
-    if #unsaved == 0 then
-        return enter(path)
-    end
-    local lines = { ("Discard unsaved edits and switch to %s?"):format(short(path)), "" }
-    for _, view in ipairs(unsaved) do
-        lines[#lines + 1] = "  " .. view.name
-    end
-    vim.schedule(function()
-        malleable.confirm({
-            title = " Unsaved edits ",
-            lines = lines,
-            on_yes = function()
-                -- it may have gone while the question was up
-                if switchable(path) then enter(path) end
-            end,
-        })
+    M.discarding(("Discard unsaved edits and switch to %s?"):format(short(path)), function()
+        -- it may have gone while the question was up
+        if switchable(path) then enter(path) end
     end)
 end
 

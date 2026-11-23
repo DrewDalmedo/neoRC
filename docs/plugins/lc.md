@@ -39,17 +39,21 @@ When all cases pass, `submit` runs them again with ASan and UBSan, as LeetCode b
 
 ## Views
 
-The result, stats, statement, and problems board are [malleable](../development.md#malleable-buffers) views. In each one, `g?` lists its keys and `q` closes it. The result, stats, and board share the panel at the bottom.
+The result, stats, statement, and problems board are [malleable](../development.md#malleable-buffers) views. In each one, `g?` lists its keys and `q` closes it. The result and stats share the panel at the bottom.
 
 The picker handles quick choices: `:Lc list`, and finding a problem or choosing a tag from the board.
 
 ### Problems board
 
+Opening the board clears the screen the way switching [projects](projects.md) does. Changed files are saved, other tabs, windows, and buffers close, and unsaved edits in a malleable view get a question first. A board already on screen just updates.
+
+Starting a problem closes the board and puts the solution in its place, beside the statement.
+
 | Key | Action |
 |---|---|
 | `<CR>` | Open the problem, as the `open` option says |
 | `s` | Start it |
-| `p` | Show its statement and stay on the board |
+| `p` | Show its statement in a split and stay on the board |
 | `fd` | Cycle the difficulty filter |
 | `fs` | Cycle the status filter |
 | `ft` | Add or remove a tag. Several tags must all match |

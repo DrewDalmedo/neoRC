@@ -1,8 +1,12 @@
 -- lua/neo/plugins/lc/board.lua
--- :Lc problems: every problem as a malleable view in the bottom panel, to
--- browse, narrow and act on. lc does the filtering (lc list's flags), so the
--- board always shows what lc would. The picker does the one-shot choices
--- inside it: finding a problem and choosing a tag.
+-- :Lc problems: every problem as a malleable view, to browse, narrow and act
+-- on. lc does the filtering (lc list's flags), so the board always shows
+-- what lc would. The picker does the one-shot choices inside it: finding a
+-- problem and choosing a tag.
+--
+-- Opening the board clears the screen as switching projects does (changed
+-- files are saved, everything else closes). Starting a problem hands the
+-- board's window to the solution; a statement opens beside the board.
 
 local catalog = require("neo.plugins.lc.catalog")
 local config = require("neo.plugins.lc.config")
@@ -44,15 +48,24 @@ local function list_args(f)
     return args
 end
 
--- Asks lc for the problems that pass filters. After an error, which lc's
--- message explains, the board keeps what it had.
-local function load(filters)
+-- Asks lc for the problems that pass filters: the filters in full and the
+-- problems, or nil after an error, which lc's message explains.
+local function fetch(filters)
     filters = { difficulty = filters.difficulty, status = filters.status, tags = filters.tags or {} }
     local doc = ui.json(list_args(filters))
     if not doc then
+        return nil
+    end
+    return filters, doc.problems or {}
+end
+
+-- After an error, the board keeps what it had.
+local function load(filters)
+    local wanted, problems = fetch(filters)
+    if not wanted then
         return false
     end
-    state.filters, state.problems = filters, doc.problems or {}
+    state.filters, state.problems = wanted, problems
     return true
 end
 
@@ -258,21 +271,43 @@ local function board_view()
     return view
 end
 
---- Opens the board in the panel and moves there. filters: difficulty,
---- status and tags, as lc list takes them; nil keeps the current ones.
---- Returns the view and its window.
+-- Clears the screen for the board. The window left may have been the
+-- result panel's, so it stops being one.
+local function take_screen(view)
+    require("neo.plugins.projects").clear(view.buf)
+    local win = vim.api.nvim_get_current_win()
+    vim.w[win].lc_result, vim.w[win].lc_statement = nil, nil
+    vim.wo[win].winfixheight = false
+    ui.plain(win)
+    return win
+end
+
+--- Opens the board and moves there. filters: difficulty, status and tags,
+--- as lc list takes them; nil keeps the current ones. A board already on
+--- screen just updates, so a statement beside it stays. Bad filters change
+--- nothing, and neither does saying no to discarding a view's unsaved
+--- edits. Returns the view and its window, unless it has to ask first.
 function M.open(filters)
-    if not load(filters or state.filters) then
+    local wanted, problems = fetch(filters or state.filters)
+    if not wanted then
         return
     end
-    local view = board_view()
-    local win, err = ui.panel(view.buf, config.get().result or "botright 15split")
-    if not win then
-        return ui.error("lc: " .. err)
+    local function show()
+        state.filters, state.problems = wanted, problems
+        local view = board_view()
+        local win = ui.board_win()
+        if win then
+            vim.api.nvim_set_current_win(win)
+        else
+            win = take_screen(view)
+        end
+        view:when_stable(draw)
+        return view, win
     end
-    vim.api.nvim_set_current_win(win)
-    view:when_stable(draw)
-    return view, win
+    if ui.board_win() then
+        return show()
+    end
+    return require("neo.plugins.projects").discarding("Discard unsaved edits and open the problems?", show)
 end
 
 -- lc list's filter flags, as --flag value or --flag=value.

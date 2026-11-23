@@ -12,8 +12,9 @@
 -- :Lc {command} [args] (<Tab> completes; :Lc alone is :Lc list)
 --   list [--difficulty L] [--tag T] [--status S]
 --                          pick a problem; choosing one starts it
---   problems [filters]     browse them on a board in the bottom panel:
---                          filter, preview and start them from there
+--   problems [filters]     browse them on a board that replaces what's
+--                          open, as switching projects does: filter,
+--                          preview and start them from there
 --   random [filters]       open one at random: :Lc random --status todo
 --   show [problem]         its statement, in a markdown buffer
 --   start [problem] [c|cpp]
@@ -232,13 +233,15 @@ function M.start(spec, lang)
     end
     problem().remember(doc.dir, doc.problem.id)
 
-    -- The window showing the solution already, else one for editing.
+    -- The window showing the solution already, else the board's, else one
+    -- for editing. Once the problem is open, the board goes away.
     local sol = problem().find_buf(doc.solution)
-    local win = sol and ui().win_showing(sol) or ui().edit_win()
+    local win = (sol and ui().win_showing(sol)) or ui().board_win() or ui().edit_win()
     local ok, e = ui().edit(win, doc.solution)
     if not ok then
         return fail(e)
     end
+    ui().close_board()
 
     local split = config().get().statement
     if split then

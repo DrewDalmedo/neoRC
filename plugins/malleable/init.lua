@@ -1,8 +1,8 @@
 -- lua/neo/plugins/malleable/init.lua
 -- Buffers that plugins render and users act on or edit: the small core
--- shared by the Git and file plugins. It owns the buffer's lifecycle, safe
--- redraws, keys, and the shape of a write. What the lines mean, how they're
--- parsed, and what a write does stay in each plugin.
+-- shared by the Git, file, and lc plugins. It owns the buffer's lifecycle,
+-- safe redraws, keys, and the shape of a write. What the lines mean, how
+-- they're parsed, and what a write does stay in each plugin.
 --
 --   local malleable = require("neo.plugins.malleable")
 --   local view, created = malleable.open({

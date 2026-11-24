@@ -57,7 +57,7 @@ Check the [release notes](https://github.com/DrewDalmedo/neoRC/releases) first. 
 ## Pin a release
 
 ```bash
-git -C ~/.config/nvim/lua/neo checkout v1.0.0
+git -C ~/.config/nvim/lua/neo checkout v1.1.0
 ```
 
 To go back to the latest version:

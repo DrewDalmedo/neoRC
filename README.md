@@ -13,7 +13,7 @@ It runs on Neovim 0.10 and later, and CI tests it on Windows, Linux, and macOS.
 | [Projects](docs/plugins/projects.md) | Switch, create, clone, and track projects | `<leader>o` |
 | [Anchor](docs/plugins/anchor.md) | Four one-key file slots per project | `<C-p>` `<C-t>` `<C-s>` `<C-n>` |
 | [Scope](docs/plugins/scope.md) | Fuzzy file finding and live grep | `<leader>l` `<leader>h` |
-| [lc](docs/plugins/lc.md) | Offline coding practice through lcclone | `<leader>tl` |
+| [lc](docs/plugins/lc.md) | Offline coding practice through lcclone | `<leader>tl` `<leader>tp` |
 | [Syntax](docs/plugins/syntax.md) | Declarative highlighting for languages Neovim doesn't ship | Automatic |
 | [Terminal and preview](docs/plugins/terminal-and-preview.md) | One reusable terminal, and per-filetype preview commands | `<C-CR>` `<leader>p` |
 
@@ -62,7 +62,7 @@ See [Installation](docs/installation.md) for updating, pinning a release, and ch
 1. Press `<leader>o` to pick a project. `Projects` in your home directory and this config are tracked by default.
 2. Press `<leader>l` to find a file, or `<leader>f` to browse and edit the directory.
 3. Press `<leader>a` to anchor a file, then jump back to it with `<C-p>`.
-4. Press `<leader>g` to see what changed in Git. Press `g?` in any Keel or Harbor buffer to list its keys.
+4. Press `<leader>g` to see what changed in Git. Press `g?` in any Keel, Harbor, or lc view to list its keys.
 
 ## Per-machine settings
 

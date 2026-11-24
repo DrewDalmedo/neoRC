@@ -39,13 +39,15 @@ When all cases pass, `submit` runs them again with ASan and UBSan, as LeetCode b
 
 ## Views
 
-The result, stats, statement, and problems board are [malleable](../development.md#malleable-buffers) views. In each one, `g?` lists its keys and `q` closes it. The result and stats share the panel at the bottom.
+The result, stats, problems board, and the statement from `:Lc show` are [malleable](../development.md#malleable-buffers) views. In each one, `g?` lists its keys and `q` closes it. The result and stats share the panel at the bottom.
+
+The statement that `:Lc start` opens is the problem's real `README.md`, so it's an ordinary file without these keys.
 
 The picker handles quick choices: `:Lc list`, and finding a problem or choosing a tag from the board.
 
 ### Problems board
 
-Opening the board clears the screen the way switching [projects](projects.md) does. Changed files are saved, other tabs, windows, and buffers close, and unsaved edits in a malleable view get a question first. A board already on screen just updates.
+Opening the board clears the screen the way switching [projects](projects.md) does. Changed files are saved, and other tabs, windows, and buffers close. Scratch, terminal, and unnamed buffers are discarded, including any unsaved text in them. Unsaved edits in a malleable view get a question first. A board already on screen just updates.
 
 Starting a problem closes the board and puts the solution in its place, beside the statement.
 
@@ -76,7 +78,7 @@ Compile errors and sanitizer reports appear as diagnostics on the solution. They
 
 ### Stats and statement
 
-In stats, `<CR>` opens the board filtered by the difficulty or tag under the cursor, and `gr` refreshes. In a statement from `:Lc show`, `s` starts the problem.
+In stats, `<CR>` opens the board filtered by the difficulty or tag under the cursor, and `gr` refreshes. If the board isn't already on screen, this clears the screen as described above. In a statement from `:Lc show`, `s` starts the problem.
 
 ## Options
 

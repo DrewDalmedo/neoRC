@@ -46,8 +46,9 @@
 -- per case, and each failure's input, output, expected output, stdout and
 -- stderr. Its keys: a adds the case under the cursor to cases.txt, <CR>
 -- goes to what the line is about, r runs again, <C-c> cancels, q closes.
--- It, the statement, :Lc stats and :Lc problems are malleable views (see
--- neo.plugins.malleable), so g? lists each one's keys. The picker is for
+-- It, :Lc show's statement, :Lc stats and :Lc problems are malleable views
+-- (see neo.plugins.malleable), so g? lists each one's keys. The statement
+-- :Lc start opens is the real README.md, without them. The picker is for
 -- quick choices: :Lc list, and finding a problem or a tag on the board.
 -- Compile errors and sanitizer reports (--sanitize, or submit's check)
 -- become vim.diagnostic entries on the solution (source "lc"). They and the failed cases also fill the
@@ -136,7 +137,7 @@ function M.setup(opts)
     return true
 end
 
---- What choosing a problem in :Lc list or :Lc random does.
+--- What choosing a problem in :Lc list, :Lc random or on the board does.
 function M.open(p)
     if config().get().open == "show" then
         return M.show(tostring(p.id))
@@ -157,7 +158,7 @@ function M.list(fargs)
     require("neo.plugins.lc.picker").pick(doc.problems, { title = "Problems" }, M.open)
 end
 
---- :Lc problems: the board, in the bottom panel.
+--- :Lc problems: the board, which takes over the screen.
 function M.problems(fargs)
     return require("neo.plugins.lc.board").run(fargs)
 end

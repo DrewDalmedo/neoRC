@@ -1,8 +1,8 @@
 -- lua/neo/plugins/lc/test.lua
 -- Run from anywhere: nvim -l path/to/plugins/lc/test.lua [PATTERN...]
 --
--- tests/unit.lua needs no lc and always runs. tests/commands.lua, start.lua
--- and run.lua drive :Lc against lcclone's real lc, and run when it is
+-- tests/unit.lua needs no lc and always runs. tests/commands.lua, start.lua,
+-- run.lua and board.lua drive :Lc against lcclone's real lc, and run when it is
 -- there: LC names the binary (else lc on PATH), LC_PROBLEMS its problems
 -- (else where lc keeps them: $XDG_DATA_HOME/lcclone/problems,
 -- ~/.local/share/lcclone/problems, or beside lc's install prefix). They
@@ -48,10 +48,10 @@ H.init(here, rtp)
 
 local suites = { "unit" }
 if have_lc then
-    vim.list_extend(suites, { "commands", "start", "run" })
+    vim.list_extend(suites, { "commands", "start", "run", "board" })
     out(("lc: %s, problems in %s\n"):format(H.lc, H.problems))
 else
-    out(("skip: the tests against lc (commands, start, run): %s\n"):format(why))
+    out(("skip: the tests against lc (commands, start, run, board): %s\n"):format(why))
 end
 
 local patterns = {}

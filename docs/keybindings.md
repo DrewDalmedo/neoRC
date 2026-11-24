@@ -45,6 +45,7 @@ These exist only when the [lc](plugins/lc.md) plugin is active.
 | Key | Action |
 |---|---|
 | `<leader>tl` | Pick a problem |
+| `<leader>tp` | Browse problems on the board |
 | `<leader>tt` | Test the solution |
 | `<leader>ts` | Submit the solution |
 | `<leader>tr` | Show the last result |

@@ -75,9 +75,9 @@ Settings are layered in this order, with later ones winning: the defaults, this 
 | `diagnostics` | `true` | Show compile errors and sanitizer reports as diagnostics |
 | `quickfix` | `true` | Add errors and failed cases to the quickfix list |
 | `notify` | `true` | Notify the verdict when a run ends |
-| `keys` | See below | Keys in the result buffer. Set one to `false` to disable it |
+| `keys` | See below | Keys in the result buffer. `close` and `help` apply to every lc view. Set one to `false` to disable it |
 
-The default `keys` are `add_case = "a"`, `jump = "<CR>"`, `rerun = "r"`, `cancel = "<C-c>"`, and `close = "q"`.
+The default `keys` are `add_case = "a"`, `jump = "<CR>"`, `rerun = "r"`, `cancel = "<C-c>"`, `close = "q"`, and `help = "g?"`.
 
 Compilers, language standards, and the workspace are lcclone's own settings, in `~/.config/lcclone/config`.
 

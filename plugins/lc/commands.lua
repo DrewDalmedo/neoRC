@@ -160,6 +160,12 @@ M.subcommands = {
         end,
         complete = complete_filters,
     },
+    problems = {
+        run = function(args)
+            lc().problems(args)
+        end,
+        complete = complete_filters,
+    },
     random = {
         run = function(args)
             lc().random(args)

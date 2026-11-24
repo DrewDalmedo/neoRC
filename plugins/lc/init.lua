@@ -12,6 +12,9 @@
 -- :Lc {command} [args] (<Tab> completes; :Lc alone is :Lc list)
 --   list [--difficulty L] [--tag T] [--status S]
 --                          pick a problem; choosing one starts it
+--   problems [filters]     browse them on a board that replaces what's
+--                          open, as switching projects does: filter,
+--                          preview and start them from there
 --   random [filters]       open one at random: :Lc random --status todo
 --   show [problem]         its statement, in a markdown buffer
 --   start [problem] [c|cpp]
@@ -43,6 +46,9 @@
 -- per case, and each failure's input, output, expected output, stdout and
 -- stderr. Its keys: a adds the case under the cursor to cases.txt, <CR>
 -- goes to what the line is about, r runs again, <C-c> cancels, q closes.
+-- It, the statement, :Lc stats and :Lc problems are malleable views (see
+-- neo.plugins.malleable), so g? lists each one's keys. The picker is for
+-- quick choices: :Lc list, and finding a problem or a tag on the board.
 -- Compile errors and sanitizer reports (--sanitize, or submit's check)
 -- become vim.diagnostic entries on the solution (source "lc"). They and the failed cases also fill the
 -- quickfix list, replacing the last run's list but never one of yours.
@@ -89,15 +95,8 @@ local function fail(err)
     ui().error("lc: " .. err)
 end
 
--- `lc <args> --json`, with its warnings shown; nil after an error, which
--- is shown too, with the warnings that can explain it (a skipped pack).
 local function json(args)
-    local doc, err, errdoc = cli().json(args)
-    ui().warn_doc(doc or errdoc)
-    if not doc then
-        fail(err)
-    end
-    return doc
+    return ui().json(args)
 end
 
 -- Native Windows only: WSL is Linux to Neovim (has("wsl"), not "win32").
@@ -158,6 +157,11 @@ function M.list(fargs)
     require("neo.plugins.lc.picker").pick(doc.problems, { title = "Problems" }, M.open)
 end
 
+--- :Lc problems: the board, in the bottom panel.
+function M.problems(fargs)
+    return require("neo.plugins.lc.board").run(fargs)
+end
+
 --- :Lc random: one of the problems that pass the filters, opened.
 function M.random(fargs)
     local doc = json(vim.list_extend({ "random" }, fargs or {}))
@@ -190,8 +194,17 @@ function M.show(spec)
         return
     end
     local p = doc.problem
-    local buf = ui().scratch(("lc://problem/%04d-%s"):format(p.id, p.slug), "markdown")
-    ui().set_lines(buf, require("neo.plugins.lc.statement").markdown(p))
+    local view = ui().view(("lc://problem/%04d-%s"):format(p.id, p.slug), {
+        filetype = "markdown",
+        keys = ui().keys({
+            { "s", function() M.start(tostring(p.id)) end, desc = "Start this problem" },
+        }),
+    })
+    local buf = view.buf
+    local lines = require("neo.plugins.lc.statement").markdown(p)
+    view:when_stable(function()
+        view:replace(lines)
+    end)
     vim.b[buf].lc_problem = { id = p.id, slug = p.slug }
     local win, err = ui().show(buf, config().get().statement or "leftabove vsplit", "lc_statement")
     if not win then
@@ -220,13 +233,15 @@ function M.start(spec, lang)
     end
     problem().remember(doc.dir, doc.problem.id)
 
-    -- The window showing the solution already, else one for editing.
+    -- The window showing the solution already, else the board's, else one
+    -- for editing. Once the problem is open, the board goes away.
     local sol = problem().find_buf(doc.solution)
-    local win = sol and ui().win_showing(sol) or ui().edit_win()
+    local win = (sol and ui().win_showing(sol)) or ui().board_win() or ui().edit_win()
     local ok, e = ui().edit(win, doc.solution)
     if not ok then
         return fail(e)
     end
+    ui().close_board()
 
     local split = config().get().statement
     if split then
@@ -282,58 +297,7 @@ end
 
 --- :Lc stats: what you have solved, by difficulty and tag.
 function M.stats()
-    local doc = json({ "stats" })
-    if not doc then
-        return
-    end
-    local lines, hls = {}, {}
-    local function add(text, hl)
-        lines[#lines + 1] = text
-        if hl then
-            hls[#lines] = hl
-        end
-    end
-    local s = ("Solved %d of %d problems"):format(doc.solved or 0, doc.total or 0)
-    if (doc.attempted or 0) > 0 then
-        s = s .. (", attempted %d more"):format(doc.attempted)
-    end
-    add(s, "LcTitle")
-    local function table_of(title, rows, key)
-        add("")
-        add(("%-24s %6s %9s %6s"):format(title, "Solved", "Attempted", "Total"), "LcLabel")
-        for _, r in ipairs(rows or {}) do
-            local name = r[key]
-            if key == "difficulty" then
-                name = name:sub(1, 1):upper() .. name:sub(2)
-            end
-            add(("%-24s %6d %9d %6d"):format(name, r.solved or 0, r.attempted or 0, r.total or 0))
-        end
-    end
-    table_of("Difficulty", doc.difficulties, "difficulty")
-    table_of("Tag", doc.tags, "tag")
-
-    local buf = ui().scratch("lc://stats", "lcstats")
-    ui().set_lines(buf, lines)
-    vim.api.nvim_buf_clear_namespace(buf, ui().ns, 0, -1)
-    for lnum, hl in pairs(hls) do
-        vim.api.nvim_buf_set_extmark(buf, ui().ns, lnum - 1, 0, { end_col = #lines[lnum], hl_group = hl })
-    end
-    if not vim.b[buf].lc_keys then
-        local close = config().get().keys.close
-        if close then
-            vim.keymap.set("n", close, function()
-                if not pcall(vim.api.nvim_win_close, 0, false) then
-                    vim.cmd("enew")
-                end
-            end, { buffer = buf, nowait = true, desc = "lc: close the window" })
-        end
-        vim.b[buf].lc_keys = true
-    end
-    local win, perr = ui().panel(buf, config().get().result or "botright 15split")
-    if not win then
-        return fail(perr)
-    end
-    return buf, win
+    return require("neo.plugins.lc.stats").open()
 end
 
 local STDS = {

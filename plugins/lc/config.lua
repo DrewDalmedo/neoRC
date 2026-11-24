@@ -9,11 +9,12 @@ M.defaults = {
     -- The lc command: a string, or a list for a command with arguments.
     -- A leading "~/" expands to the home directory.
     cmd = "lc",
-    -- Which picker :Lc list uses: "neo" (neo.plugins.picker) or "select"
-    -- (vim.ui.select).
+    -- Which picker :Lc list and the board's find and tag keys use: "neo"
+    -- (neo.plugins.picker) or "select" (vim.ui.select).
     picker = "neo",
-    -- What choosing a problem in :Lc list or :Lc random does: "start" (set it
-    -- up and open it, like :Lc start) or "show" (its statement, like :Lc show).
+    -- What choosing a problem in :Lc list, :Lc random or on the board does:
+    -- "start" (set it up and open it, like :Lc start) or "show" (its
+    -- statement, like :Lc show).
     open = "start",
     -- How the statement opens beside the solution: an Ex command that splits
     -- the window, or false not to open it in :Lc start.
